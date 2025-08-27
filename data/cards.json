@@ -1,0 +1,160 @@
+{
+  "cards": [
+    {
+      "id": "card_001",
+      "name": "KB국민 마이포인트카드",
+      "bank": "KB국민카드",
+      "annual_fee": 20000,
+      "benefits": [
+        {
+          "category": "간편결제",
+          "type": "cashback",
+          "rate": 5.0,
+          "monthly_limit": 10000,
+          "min_purchase": 10000
+        },
+        {
+          "category": "온라인쇼핑",
+          "type": "cashback",
+          "rate": 3.0,
+          "monthly_limit": 15000,
+          "min_purchase": 10000
+        }
+      ],
+      "conditions": {
+        "prev_month_min": 300000,
+        "benefit_cap": 20000
+      }
+    },
+    {
+      "id": "card_002",
+      "name": "삼성 taptap O 카드",
+      "bank": "삼성카드",
+      "annual_fee": 15000,
+      "benefits": [
+        {
+          "category": "온라인쇼핑",
+          "type": "cashback",
+          "rate": 3.0,
+          "monthly_limit": 20000,
+          "min_purchase": 10000
+        },
+        {
+          "category": "마트",
+          "type": "cashback",
+          "rate": 2.0,
+          "monthly_limit": 10000,
+          "min_purchase": 10000
+        }
+      ],
+      "conditions": {
+        "prev_month_min": 200000,
+        "benefit_cap": 25000
+      }
+    },
+    {
+      "id": "card_003",
+      "name": "우리 카드의정석 COOKIE CHECK",
+      "bank": "우리카드",
+      "annual_fee": 25000,
+      "benefits": [
+        {
+          "category": "구독서비스",
+          "type": "cashback",
+          "rate": 10.0,
+          "monthly_limit": 10000,
+          "min_purchase": 5000
+        },
+        {
+          "category": "카페",
+          "type": "cashback",
+          "rate": 5.0,
+          "monthly_limit": 5000,
+          "min_purchase": 5000
+        }
+      ],
+      "conditions": {
+        "prev_month_min": 500000,
+        "benefit_cap": 15000
+      }
+    },
+    {
+      "id": "card_004",
+      "name": "신한 플래티넘 카드",
+      "bank": "신한카드",
+      "annual_fee": 30000,
+      "benefits": [
+        {
+          "category": "편의점",
+          "type": "cashback",
+          "rate": 3.0,
+          "monthly_limit": 8000,
+          "min_purchase": 5000
+        },
+        {
+          "category": "대중교통",
+          "type": "cashback",
+          "rate": 2.0,
+          "monthly_limit": 5000,
+          "min_purchase": 5000
+        }
+      ],
+      "conditions": {
+        "prev_month_min": 400000,
+        "benefit_cap": 13000
+      }
+    },
+    {
+      "id": "card_005",
+      "name": "현대 ZERO 카드",
+      "bank": "현대카드",
+      "annual_fee": 0,
+      "benefits": [
+        {
+          "category": "주유",
+          "type": "cashback",
+          "rate": 2.0,
+          "monthly_limit": 10000,
+          "min_purchase": 10000
+        },
+        {
+          "category": "배달앱",
+          "type": "cashback",
+          "rate": 3.0,
+          "monthly_limit": 8000,
+          "min_purchase": 5000
+        }
+      ],
+      "conditions": {
+        "prev_month_min": 100000,
+        "benefit_cap": 18000
+      }
+    },
+    {
+      "id": "card_006",
+      "name": "BC TOP 카드",
+      "bank": "BC카드",
+      "annual_fee": 18000,
+      "benefits": [
+        {
+          "category": "마트",
+          "type": "cashback",
+          "rate": 3.0,
+          "monthly_limit": 12000,
+          "min_purchase": 10000
+        },
+        {
+          "category": "편의점",
+          "type": "cashback",
+          "rate": 2.0,
+          "monthly_limit": 6000,
+          "min_purchase": 5000
+        }
+      ],
+      "conditions": {
+        "prev_month_min": 250000,
+        "benefit_cap": 18000
+      }
+    }
+  ]
+}

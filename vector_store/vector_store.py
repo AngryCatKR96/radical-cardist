@@ -58,7 +58,7 @@ class CardVectorStore:
         except Exception as e:
             raise ValueError(f"임베딩 생성 실패: {e}")
     
-    def _apply_metadata_filters(self, filters: Dict) -> Dict:
+    def _apply_metadata_filters(self, filters: Dict) -> Optional[Dict]:
         """
         메타데이터 필터를 ChromaDB 형식으로 변환
         
@@ -68,7 +68,7 @@ class CardVectorStore:
         Returns:
             ChromaDB where 절
         """
-        where_clause = {}
+        conditions = []
         
         # 연회비 필터
         if "annual_fee_max" in filters:
@@ -86,17 +86,25 @@ class CardVectorStore:
             card_type = filters["type"]
             if card_type in ["credit", "debit"]:
                 type_map = {"credit": "C", "debit": "D"}
-                where_clause["type"] = type_map.get(card_type)
+                conditions.append({"type": type_map.get(card_type)})
             # "both"인 경우 필터 없음
         
         # 온라인 전용 필터
         if filters.get("only_online"):
-            where_clause["only_online"] = True
+            conditions.append({"only_online": True})
         
-        # 단종 카드 제외
-        where_clause["is_discon"] = False
+        # 단종 카드 제외 (항상 적용)
+        conditions.append({"is_discon": False})
         
-        return where_clause if where_clause else None
+        # 조건이 없으면 None 반환
+        if not conditions:
+            return None
+        
+        # 조건이 1개면 그대로, 여러 개면 $and 사용
+        if len(conditions) == 1:
+            return conditions[0]
+        else:
+            return {"$and": conditions}
     
     def search_chunks(
         self,

@@ -88,6 +88,7 @@ def create_summary_document(card_data: Dict) -> Optional[Dict]:
         parts.append(f"전월실적 {prev_month:,}원 이상")
     
     annual_fee_detail = fees.get("annual_detail", "")
+    fee_match = None  # 변수 초기화
     if annual_fee_detail:
         # 숫자 추출 시도
         fee_match = re.search(r'(\d{1,3}(?:,\d{3})*)', annual_fee_detail)
@@ -122,6 +123,7 @@ def create_summary_document(card_data: Dict) -> Optional[Dict]:
     # 연회비 숫자 추출 (선택적)
     if fee_match:
         try:
+            fee_str = fee_match.group(1).replace(',', '')
             metadata["annual_fee_total"] = int(fee_str)
         except:
             pass
@@ -193,15 +195,15 @@ def create_benefit_document(card_data: Dict, benefit_item: Dict) -> Optional[Dic
         "doc_type": "benefit",
         "category_std": category_std,
         "benefit_type": benefit_type,
-        "payment_methods": payment_methods,
+        "payment_methods": ", ".join(payment_methods) if payment_methods else "",  # 리스트를 문자열로
         "exclusions_present": any(b.get("category") == "유의사항" for b in card_data.get("benefits_html", [])),
         "is_discon": False
     }
     
-    # 태그 추가
+    # 태그 추가 (리스트를 문자열로 변환)
     tags = card_data.get("hints", {}).get("top_tags", [])
     if tags:
-        metadata["tags"] = tags[:5]  # 최대 5개만
+        metadata["tags"] = ", ".join(tags[:5])  # 최대 5개를 쉼표로 구분된 문자열로
     
     return {"text": text, "metadata": metadata}
 

@@ -1,13 +1,11 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import uvicorn
 import os
 from dotenv import load_dotenv
-
-from models import RecommendationRequest, RecommendationResponse
-from llm_service import CreditCardLLMService
+from typing import List, Optional
 
 # 새로운 RAG + Agentic 모듈
 from agents.input_parser import InputParser
@@ -15,12 +13,11 @@ from agents.benefit_analyzer import BenefitAnalyzer
 from agents.recommender import Recommender
 from agents.response_generator import ResponseGenerator
 from vector_store.vector_store import CardVectorStore
+from vector_store.embeddings import EmbeddingGenerator
+from data_collection.card_gorilla_client import CardGorillaClient
 
 # 환경 변수 로드
 load_dotenv()
-
-# LLM 서비스 전역 변수
-llm_service = None
 
 # RAG + Agentic 서비스 전역 변수
 input_parser = None
@@ -28,14 +25,15 @@ benefit_analyzer = None
 recommender = None
 response_generator = None
 vector_store = None
+embedding_generator = None
+card_client = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """애플리케이션 생명주기 관리"""
-    global llm_service
     
     # Startup: 애플리케이션 시작 시
-    print("🚀 신용카드 추천 LLM 서비스를 시작합니다...")
+    print("🚀 신용카드 추천 서비스를 시작합니다...")
     
     # OpenAI API 키 확인
     api_key = os.getenv("OPENAI_API_KEY")
@@ -44,21 +42,16 @@ async def lifespan(app: FastAPI):
         print("   .env 파일에 실제 API 키를 설정하거나 환경 변수를 설정해주세요.")
         print("   LLM 기능은 제한적으로 작동할 수 있습니다.")
     
-    try:
-        llm_service = CreditCardLLMService()
-        print("✅ LLM 서비스가 성공적으로 초기화되었습니다.")
-    except Exception as e:
-        print(f"❌ LLM 서비스 초기화 실패: {str(e)}")
-        print("   기본 추천 기능만 사용 가능합니다.")
-    
     # RAG + Agentic 서비스 초기화
     try:
-        global input_parser, benefit_analyzer, recommender, response_generator, vector_store
+        global input_parser, benefit_analyzer, recommender, response_generator, vector_store, embedding_generator, card_client
         input_parser = InputParser()
         benefit_analyzer = BenefitAnalyzer()
         recommender = Recommender()
         response_generator = ResponseGenerator()
         vector_store = CardVectorStore()
+        embedding_generator = EmbeddingGenerator()
+        card_client = CardGorillaClient()
         print("✅ RAG + Agentic 서비스가 성공적으로 초기화되었습니다.")
     except Exception as e:
         print(f"⚠️  RAG + Agentic 서비스 초기화 실패: {str(e)}")
@@ -68,8 +61,6 @@ async def lifespan(app: FastAPI):
     
     # Shutdown: 애플리케이션 종료 시
     print("🛑 서비스를 종료합니다...")
-    if llm_service:
-        print("   LLM 서비스 정리 중...")
     print("✅ 서비스가 안전하게 종료되었습니다.")
 
 # FastAPI 앱 생성 (lifespan 포함)
@@ -93,14 +84,19 @@ app.add_middleware(
 async def root():
     """루트 엔드포인트 - 서비스 정보를 반환합니다."""
     return {
-        "service": "신용카드 추천 LLM 서비스",
-        "version": "1.0.0",
-        "description": "사용자의 소비 패턴을 분석하여 최적의 신용카드 조합을 추천합니다",
+        "service": "신용카드 추천 서비스",
+        "version": "2.0.0",
+        "description": "사용자의 소비 패턴을 분석하여 최적의 신용카드를 추천합니다 (RAG + Agentic)",
         "endpoints": {
-            "POST /recommend": "신용카드 추천 (기존)",
-            "POST /recommend/natural-language": "자연어 입력 기반 카드 추천 (RAG + Agentic)",
-            "POST /recommend/structured": "구조화된 입력 기반 카드 추천 (RAG + Agentic)",
-            "GET /health": "서비스 상태 확인"
+            "POST /recommend/natural-language": "자연어 입력 기반 카드 추천",
+            "POST /recommend/structured": "구조화된 입력 기반 카드 추천",
+            "GET /health": "서비스 상태 확인",
+            "POST /admin/cards/fetch": "1단계: 카드고릴라에서 데이터 수집 (관리자)",
+            "POST /admin/cards/embed": "2단계: JSON을 임베딩으로 변환 (관리자)",
+            "POST /admin/cards/sync": "통합: fetch + embed 한번에 실행 (관리자)",
+            "POST /admin/cards/{card_id}": "특정 카드 추가/업데이트 (관리자)",
+            "GET /admin/cards/stats": "벡터 DB 통계 확인 (관리자)",
+            "DELETE /admin/cards/reset": "벡터 DB 초기화 (관리자)"
         }
     }
 
@@ -109,120 +105,14 @@ async def health_check():
     """서비스 상태를 확인합니다."""
     return {
         "status": "healthy",
-        "llm_service": "available" if llm_service else "unavailable",
+        "rag_service": "available" if vector_store else "unavailable",
         "openai_api_key": "configured" if os.getenv("OPENAI_API_KEY") and os.getenv("OPENAI_API_KEY") != "your_openai_api_key_here" else "not_configured"
     }
-
-@app.post("/recommend", response_model=RecommendationResponse)
-async def recommend_cards(request: RecommendationRequest):
-    """
-    사용자의 소비 패턴을 분석하여 최적의 신용카드 조합을 추천합니다.
-    
-    - **monthly_spending**: 월 총 소비 금액
-    - **spending_breakdown**: 카테고리별 소비 금액
-    - **subscriptions**: 구독 서비스 목록
-    """
-    try:
-        if not llm_service:
-            raise HTTPException(
-                status_code=503, 
-                detail="LLM 서비스를 사용할 수 없습니다. 서비스 초기화를 확인해주세요."
-            )
-        
-        # 추천 생성
-        result = llm_service.get_recommendation(request)
-        
-        # 에러가 있는 경우
-        if "error" in result:
-            raise HTTPException(status_code=500, detail=result["error"])
-        
-        # 응답 모델 생성
-        response = RecommendationResponse(
-            recommendation_text=result["recommendation_text"],
-            selected_cards=result["selected_cards"],
-            monthly_savings=result["monthly_savings"],
-            annual_savings=result["annual_savings"],
-            usage_strategy=result["usage_strategy"],
-            total_annual_fee=result["total_annual_fee"],
-            net_annual_savings=result["net_annual_savings"]
-        )
-        
-        return response
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"추천 생성 중 오류가 발생했습니다: {str(e)}"
-        )
-
-@app.get("/cards")
-async def get_available_cards():
-    """사용 가능한 카드 목록을 반환합니다."""
-    try:
-        if not llm_service:
-            raise HTTPException(
-                status_code=503, 
-                detail="LLM 서비스를 사용할 수 없습니다."
-            )
-        
-        cards = []
-        for card in llm_service.cards:
-            card_info = {
-                "id": card.id,
-                "name": card.name,
-                "bank": card.bank,
-                "annual_fee": card.annual_fee,
-                "benefits": [
-                    {
-                        "category": benefit.category,
-                        "type": benefit.type,
-                        "rate": benefit.rate,
-                        "monthly_limit": benefit.monthly_limit,
-                        "min_purchase": benefit.min_purchase
-                    }
-                    for benefit in card.benefits
-                ],
-                "conditions": {
-                    "prev_month_min": card.conditions.prev_month_min,
-                    "benefit_cap": card.conditions.benefit_cap
-                }
-            }
-            cards.append(card_info)
-        
-        return {"cards": cards, "total": len(cards)}
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"카드 정보 조회 중 오류가 발생했습니다: {str(e)}"
-        )
-
-@app.post("/test")
-async def test_recommendation():
-    """테스트용 추천 요청을 실행합니다."""
-    test_request = RecommendationRequest(
-        monthly_spending=1000000,
-        spending_breakdown={
-            "온라인쇼핑": 300000,
-            "마트": 200000,
-            "편의점": 100000,
-            "카페": 50000,
-            "대중교통": 100000,
-            "주유": 150000,
-            "배달앱": 100000
-        },
-        subscriptions=["넷플릭스", "유튜브프리미엄", "스포티파이"]
-    )
-    
-    return await recommend_cards(test_request)
-
 
 # ========== 새로운 RAG + Agentic 엔드포인트 ==========
 
 @app.post("/recommend/natural-language")
-async def recommend_natural_language(user_input: str):
+async def recommend_natural_language(user_input: str = Body(..., embed=True)):
     """
     자연어 입력 기반 카드 추천
     
@@ -398,13 +288,567 @@ async def recommend_structured(user_intent: dict):
             detail=f"추천 생성 중 오류가 발생했습니다: {str(e)}"
         )
 
+
+# ========== 관리자 API 엔드포인트 ==========
+
+@app.get("/admin/cards/stats")
+async def get_vector_db_stats():
+    """
+    벡터 DB 통계 확인
+    
+    Returns:
+        ChromaDB 컬렉션의 통계 정보
+    """
+    try:
+        if not embedding_generator:
+            raise HTTPException(
+                status_code=503,
+                detail="임베딩 서비스를 사용할 수 없습니다."
+            )
+        
+        collection = embedding_generator.collection
+        count = collection.count()
+        
+        # 카드 ID 추출
+        results = collection.get(limit=count)
+        card_ids = set()
+        for metadata in results["metadatas"]:
+            card_id = metadata.get("card_id")
+            if card_id:
+                card_ids.add(card_id)
+        
+        return {
+            "total_documents": count,
+            "total_cards": len(card_ids),
+            "collection_name": embedding_generator.collection_name,
+            "chroma_db_path": str(embedding_generator.chroma_db_path)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"통계 조회 중 오류가 발생했습니다: {str(e)}"
+        )
+
+
+async def _fetch_cards_from_cardgorilla(card_ids: List[int], overwrite: bool):
+    """1단계: 카드고릴라에서 데이터 수집 및 JSON 생성"""
+    results = {
+        "success": [],
+        "failed": [],
+        "skipped": []
+    }
+    
+    print(f"📥 1단계: 카드 데이터 수집 시작 ({len(card_ids)}개 ID)")
+    
+    for idx, card_id in enumerate(card_ids, 1):
+        try:
+            if idx % 100 == 0:
+                print(f"  진행: {idx}/{len(card_ids)} ({idx*100//len(card_ids)}%)")
+            
+            # 카드 데이터 조회 (자동으로 JSON 저장됨)
+            card_data = await card_client.fetch_card_detail(card_id, use_cache=not overwrite)
+            
+            if card_data:
+                results["success"].append({
+                    "card_id": card_id,
+                    "name": card_data["meta"]["name"]
+                })
+            else:
+                results["skipped"].append({
+                    "card_id": card_id,
+                    "reason": "카드를 찾을 수 없거나 단종됨"
+                })
+                
+        except Exception as e:
+            results["failed"].append({
+                "card_id": card_id,
+                "error": str(e)
+            })
+            continue
+    
+    print(f"✅ 1단계 완료: 성공 {len(results['success'])}개, 실패 {len(results['failed'])}개, 건너뜀 {len(results['skipped'])}개")
+    return results
+
+
+async def _embed_cards_to_chromadb(card_ids: Optional[List[int]], overwrite: bool):
+    """2단계: JSON 파일을 읽어서 임베딩 생성 및 ChromaDB 저장"""
+    results = {
+        "success": [],
+        "failed": [],
+        "skipped": []
+    }
+    
+    # card_ids가 없으면 data/cache/ctx 폴더의 모든 JSON 파일 처리
+    if not card_ids:
+        import json
+        from pathlib import Path
+        
+        ctx_dir = Path("data/cache/ctx")
+        if not ctx_dir.exists():
+            print("⚠️  data/cache/ctx 폴더가 없습니다. 먼저 1단계(fetch)를 실행하세요.")
+            return results
+        
+        json_files = list(ctx_dir.glob("*.json"))
+        card_ids = [int(f.stem) for f in json_files]
+        print(f"📂 {len(card_ids)}개 JSON 파일 발견")
+    
+    print(f"🔨 2단계: 임베딩 생성 시작 ({len(card_ids)}개)")
+    
+    for idx, card_id in enumerate(card_ids, 1):
+        try:
+            print(f"  [{idx}/{len(card_ids)}] 카드 ID {card_id} 임베딩 중...")
+            
+            # JSON 파일 로드
+            from pathlib import Path
+            import json
+            
+            json_file = Path("data/cache/ctx") / f"{card_id}.json"
+            
+            if not json_file.exists():
+                results["skipped"].append({
+                    "card_id": card_id,
+                    "reason": "JSON 파일 없음"
+                })
+                continue
+            
+            with open(json_file, 'r', encoding='utf-8') as f:
+                card_data = json.load(f)
+            
+            # ChromaDB에 추가 (문서 분해 + 임베딩 생성)
+            embedding_generator.add_card(card_data, overwrite=overwrite)
+            
+            results["success"].append({
+                "card_id": card_id,
+                "name": card_data["meta"]["name"]
+            })
+            print(f"  ✅ 카드 ID {card_id} 완료")
+                
+        except Exception as e:
+            error_msg = str(e)
+            
+            # OpenAI 크레딧/할당량 부족 감지
+            if "insufficient_quota" in error_msg.lower() or "quota" in error_msg.lower():
+                print(f"\n💰 OpenAI 크레딧 부족 감지!")
+                print(f"   처리 완료: {len(results['success'])}개")
+                print(f"   미처리: {len(card_ids) - idx}개")
+                print(f"   다음 카드부터 재개: card_id={card_id}")
+                
+                results["failed"].append({
+                    "card_id": card_id,
+                    "error": "OpenAI 크레딧 부족으로 중단"
+                })
+                
+                # 크레딧 부족은 치명적 에러이므로 즉시 중단
+                break
+            
+            # Rate Limit 감지
+            elif "rate_limit" in error_msg.lower():
+                print(f"  ⏳ Rate Limit 도달, 60초 대기 후 재시도...")
+                import asyncio
+                await asyncio.sleep(60)
+                
+                # 재시도
+                try:
+                    embedding_generator.add_card(card_data, overwrite=overwrite)
+                    results["success"].append({
+                        "card_id": card_id,
+                        "name": card_data["meta"]["name"]
+                    })
+                    print(f"  ✅ 카드 ID {card_id} 완료 (재시도 성공)")
+                except Exception as retry_error:
+                    results["failed"].append({
+                        "card_id": card_id,
+                        "error": f"재시도 실패: {str(retry_error)}"
+                    })
+                    print(f"  ❌ 카드 ID {card_id} 재시도 실패: {retry_error}")
+            else:
+                # 일반 에러는 기록하고 계속
+                results["failed"].append({
+                    "card_id": card_id,
+                    "error": error_msg
+                })
+                print(f"  ❌ 카드 ID {card_id} 실패: {e}")
+            
+            continue
+    
+    print(f"✅ 2단계 완료: 성공 {len(results['success'])}개, 실패 {len(results['failed'])}개, 건너뜀 {len(results['skipped'])}개")
+    return results
+
+
+async def _sync_cards_background(card_ids: List[int], overwrite: bool):
+    """여러 카드 동기화 (동기 방식으로 결과 반환)"""
+    results = {
+        "success": [],
+        "failed": [],
+        "skipped": []
+    }
+    
+    print(f"🔄 카드 동기화 시작: {len(card_ids)}개 카드")
+    
+    for idx, card_id in enumerate(card_ids, 1):
+        try:
+            print(f"  [{idx}/{len(card_ids)}] 카드 ID {card_id} 처리 중...")
+            
+            # 카드 데이터 조회
+            card_data = await card_client.fetch_card_detail(card_id, use_cache=not overwrite)
+            
+            if card_data:
+                # ChromaDB에 추가
+                embedding_generator.add_card(card_data, overwrite=overwrite)
+                results["success"].append({
+                    "card_id": card_id,
+                    "name": card_data["meta"]["name"]
+                })
+                print(f"  ✅ 카드 ID {card_id} 완료")
+            else:
+                results["skipped"].append({
+                    "card_id": card_id,
+                    "reason": "카드를 찾을 수 없거나 단종됨"
+                })
+                print(f"  ⏭️  카드 ID {card_id} 건너뜀 (단종 또는 없음)")
+                
+        except Exception as e:
+            results["failed"].append({
+                "card_id": card_id,
+                "error": str(e)
+            })
+            print(f"  ❌ 카드 ID {card_id} 실패: {e}")
+            continue
+    
+    print(f"✅ 동기화 완료: 성공 {len(results['success'])}개, 실패 {len(results['failed'])}개, 건너뜀 {len(results['skipped'])}개")
+    return results
+
+
+@app.post("/admin/cards/fetch")
+async def fetch_cards_from_cardgorilla(
+    overwrite: bool = Query(False),
+    start_id: int = Query(1),
+    end_id: int = Query(5000),
+    card_ids: Optional[List[int]] = Body(None)
+):
+    """
+    1단계: 카드고릴라에서 데이터 수집 및 JSON 생성
+    
+    카드고릴라 API에서 카드 정보를 가져와 압축 컨텍스트 JSON 파일로 저장합니다.
+    (data/cache/ctx/{card_id}.json)
+    
+    💰 OpenAI 크레딧: 사용하지 않음 ✅
+    
+    Args:
+        card_ids: 카드 ID 리스트 (지정하면 해당 ID만)
+        overwrite: 기존 JSON 파일 덮어쓰기 여부
+        start_id: card_ids 없을 때 시작 ID (기본값: 1)
+        end_id: card_ids 없을 때 종료 ID (기본값: 5000)
+    
+    Returns:
+        수집 결과 (성공/실패/건너뜀 목록)
+    """
+    try:
+        if not card_client:
+            raise HTTPException(
+                status_code=503,
+                detail="카드 수집 서비스를 사용할 수 없습니다."
+            )
+        
+        # card_ids가 없으면 범위 생성
+        if not card_ids:
+            card_ids = list(range(start_id, end_id + 1))
+            print(f"📋 카드 ID 범위: {start_id}~{end_id} ({len(card_ids)}개)")
+        
+        # 1단계 실행
+        results = await _fetch_cards_from_cardgorilla(card_ids, overwrite)
+        
+        return {
+            "success": True,
+            "message": f"1단계 완료: 성공 {len(results['success'])}개, 실패 {len(results['failed'])}개, 건너뜀 {len(results['skipped'])}개",
+            "summary": {
+                "total_tried": len(card_ids),
+                "success_count": len(results["success"]),
+                "failed_count": len(results["failed"]),
+                "skipped_count": len(results["skipped"])
+            },
+            "details": results,
+            "next_step": "POST /admin/cards/embed 를 실행하여 임베딩을 생성하세요"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"카드 수집 중 오류가 발생했습니다: {str(e)}"
+        )
+
+
+@app.post("/admin/cards/embed")
+async def embed_cards_to_chromadb(
+    overwrite: bool = Query(False),
+    start_id: int = Query(None),
+    end_id: int = Query(None),
+    card_ids: Optional[List[int]] = Body(None)
+):
+    """
+    2단계: JSON을 임베딩으로 변환하여 ChromaDB에 저장
+    
+    data/cache/ctx 폴더의 JSON 파일들을 읽어서:
+    - 문서로 분해
+    - OpenAI Embeddings 생성
+    - ChromaDB에 저장
+    
+    💰 OpenAI 크레딧: 사용함 ⚠️ (text-embedding-3-small)
+    
+    Args:
+        card_ids: 카드 ID 리스트 (지정하면 해당 ID만)
+        overwrite: 기존 임베딩 덮어쓰기 여부
+        start_id: card_ids 없을 때 시작 ID (선택사항)
+        end_id: card_ids 없을 때 종료 ID (선택사항)
+    
+    Returns:
+        임베딩 생성 결과
+        
+    Example:
+        # 모든 JSON 파일 처리
+        POST /admin/cards/embed
+        
+        # 범위 지정
+        POST /admin/cards/embed?start_id=1&end_id=100
+        
+        # 특정 카드만
+        POST /admin/cards/embed
+        {"card_ids": [2862, 1357]}
+    """
+    try:
+        if not embedding_generator:
+            raise HTTPException(
+                status_code=503,
+                detail="임베딩 서비스를 사용할 수 없습니다."
+            )
+        
+        # card_ids 결정
+        if not card_ids:
+            if start_id is not None and end_id is not None:
+                # 범위 지정된 경우
+                card_ids = list(range(start_id, end_id + 1))
+                print(f"📋 카드 ID 범위: {start_id}~{end_id} ({len(card_ids)}개)")
+            else:
+                # 범위 없으면 모든 JSON 파일
+                card_ids = None
+                print(f"📂 모든 JSON 파일 처리")
+        
+        # 2단계 실행
+        results = await _embed_cards_to_chromadb(card_ids, overwrite)
+        
+        return {
+            "success": True,
+            "message": f"2단계 완료: 성공 {len(results['success'])}개, 실패 {len(results['failed'])}개, 건너뜀 {len(results['skipped'])}개",
+            "summary": {
+                "success_count": len(results["success"]),
+                "failed_count": len(results["failed"]),
+                "skipped_count": len(results["skipped"])
+            },
+            "details": results,
+            "next_step": "GET /admin/cards/stats 로 벡터 DB 상태를 확인하세요"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"임베딩 생성 중 오류가 발생했습니다: {str(e)}"
+        )
+
+
+@app.post("/admin/cards/sync")
+async def sync_cards_batch(
+    overwrite: bool = Query(False),
+    start_id: int = Query(1),
+    end_id: int = Query(5000),
+    card_ids: Optional[List[int]] = Body(None)
+):
+    """
+    통합: fetch + embed 한번에 실행
+    
+    1단계(fetch)와 2단계(embed)를 순차적으로 실행합니다.
+    
+    💰 OpenAI 크레딧: 2단계에서 사용 ⚠️
+    
+    Args:
+        card_ids: 카드 ID 리스트
+        overwrite: 덮어쓰기 여부
+        start_id: 시작 ID
+        end_id: 종료 ID
+    
+    Returns:
+        전체 동기화 결과
+    """
+    try:
+        if not all([card_client, embedding_generator]):
+            raise HTTPException(
+                status_code=503,
+                detail="동기화 서비스를 사용할 수 없습니다."
+            )
+        
+        # card_ids가 없으면 범위 생성
+        if not card_ids:
+            card_ids = list(range(start_id, end_id + 1))
+            print(f"📋 카드 ID 범위: {start_id}~{end_id} ({len(card_ids)}개)")
+        
+        # 1단계: 데이터 수집
+        print(f"🔄 1/2 단계: 카드 데이터 수집")
+        fetch_results = await _fetch_cards_from_cardgorilla(card_ids, overwrite)
+        
+        # 성공한 카드들만 2단계로
+        successful_ids = [item["card_id"] for item in fetch_results["success"]]
+        
+        if not successful_ids:
+            return {
+                "success": True,
+                "message": "수집된 카드가 없어 임베딩 단계를 건너뜁니다.",
+                "fetch_results": fetch_results,
+                "embed_results": {"success": [], "failed": [], "skipped": []}
+            }
+        
+        # 2단계: 임베딩 생성
+        print(f"🔄 2/2 단계: 임베딩 생성 ({len(successful_ids)}개)")
+        embed_results = await _embed_cards_to_chromadb(successful_ids, overwrite)
+        
+        return {
+            "success": True,
+            "message": f"전체 완료: 수집 {len(fetch_results['success'])}개, 임베딩 {len(embed_results['success'])}개",
+            "summary": {
+                "total_tried": len(card_ids),
+                "fetch_success": len(fetch_results["success"]),
+                "embed_success": len(embed_results["success"])
+            },
+            "fetch_results": fetch_results,
+            "embed_results": embed_results
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"동기화 중 오류가 발생했습니다: {str(e)}"
+        )
+
+
+@app.post("/admin/cards/{card_id}")
+async def sync_single_card(card_id: int, overwrite: bool = False):
+    """
+    특정 카드 데이터 동기화
+    
+    카드고릴라 API에서 카드 정보를 가져와 압축 컨텍스트를 생성하고,
+    ChromaDB에 저장합니다.
+    
+    Args:
+        card_id: 카드 ID
+        overwrite: 기존 데이터 덮어쓰기 여부
+    
+    Returns:
+        동기화 결과
+    """
+    try:
+        if not all([card_client, embedding_generator]):
+            raise HTTPException(
+                status_code=503,
+                detail="카드 동기화 서비스를 사용할 수 없습니다."
+            )
+        
+        # 1. 카드 데이터 조회 및 압축 컨텍스트 생성
+        card_data = await card_client.fetch_card_detail(card_id, use_cache=not overwrite)
+        
+        if not card_data:
+            raise HTTPException(
+                status_code=404,
+                detail=f"카드를 찾을 수 없거나 단종된 카드입니다. (card_id={card_id})"
+            )
+        
+        # 2. ChromaDB에 추가
+        embedding_generator.add_card(card_data, overwrite=overwrite)
+        
+        return {
+            "success": True,
+            "card_id": card_id,
+            "card_name": card_data["meta"]["name"],
+            "issuer": card_data["meta"]["issuer"],
+            "message": "카드 동기화 완료"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"카드 동기화 중 오류가 발생했습니다: {str(e)}"
+        )
+
+
+@app.delete("/admin/cards/reset")
+async def reset_vector_db():
+    """
+    벡터 DB 초기화 (모든 데이터 삭제)
+    
+    ⚠️ 주의: 이 작업은 되돌릴 수 없습니다!
+    ChromaDB 컬렉션의 모든 카드 데이터를 삭제합니다.
+    
+    Returns:
+        초기화 결과
+    """
+    try:
+        if not embedding_generator:
+            raise HTTPException(
+                status_code=503,
+                detail="임베딩 서비스를 사용할 수 없습니다."
+            )
+        
+        collection = embedding_generator.collection
+        
+        # 현재 데이터 수 확인
+        count_before = collection.count()
+        
+        # 컬렉션 삭제 및 재생성
+        collection_name = embedding_generator.collection_name
+        embedding_generator.chroma_client.delete_collection(name=collection_name)
+        
+        # 새 컬렉션 생성
+        embedding_generator.collection = embedding_generator.chroma_client.create_collection(
+            name=collection_name,
+            metadata={"hnsw:space": "cosine"}
+        )
+        
+        # vector_store도 재초기화
+        global vector_store
+        if vector_store:
+            vector_store.collection = embedding_generator.collection
+        
+        return {
+            "success": True,
+            "message": "벡터 DB가 초기화되었습니다.",
+            "deleted_documents": count_before,
+            "collection_name": collection_name
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"벡터 DB 초기화 중 오류가 발생했습니다: {str(e)}"
+        )
+
+
 if __name__ == "__main__":
     print("📝 사용법:")
     print("   1. .env 파일에 OPENAI_API_KEY를 설정하세요")
     print("   2. pip install -r requirements.txt로 의존성을 설치하세요")
     print("   3. python main.py로 서비스를 시작하세요")
     print("   4. http://localhost:8000/docs에서 API 문서를 확인하세요")
-    print("   5. POST /test로 테스트해보세요")
+    print("   5. POST /recommend/natural-language로 테스트해보세요")
     print()
     
     uvicorn.run(

@@ -116,7 +116,42 @@ python main.py
 
 서비스가 `http://localhost:8000`에서 실행됩니다.
 
-브라우저에서 `http://localhost:8000/docs`에 접속하면 API 문서를 확인하고 테스트할 수 있습니다.
+### 5단계: 초기 데이터 동기화 ⚠️ 필수
+
+**서비스를 실행한 후, 반드시 카드 데이터를 동기화해야 합니다!**
+
+별도 터미널을 열어 실행하세요:
+
+```bash
+# 전체 카드 동기화 (data/cards.json 기반)
+curl -X POST "http://localhost:8000/admin/cards/sync"
+
+# 동기화 상태 확인
+curl http://localhost:8000/admin/cards/stats
+```
+
+**또는 특정 카드만 먼저 테스트:**
+```bash
+# 단일 카드로 빠른 테스트
+curl -X POST "http://localhost:8000/admin/cards/2862"
+```
+
+**참고:**
+- 동기화는 백그라운드로 처리되므로 즉시 응답이 반환됩니다
+- 진행 상황은 서버 로그에서 확인할 수 있습니다
+- 전체 동기화는 카드 수에 따라 몇 분 소요될 수 있습니다
+- **동기화 없이는 추천 API가 작동하지 않습니다** (벡터 DB가 비어있음)
+
+### 6단계: 서비스 테스트
+
+동기화가 완료된 후 테스트를 실행하세요:
+
+```bash
+# 테스트 스크립트 실행
+python test_api.py
+```
+
+브라우저에서 `http://localhost:8000/docs`에 접속하면 API 문서를 확인하고 대화형으로 테스트할 수 있습니다.
 
 ## 🔎 아키텍처 상세 설명
 
@@ -372,7 +407,9 @@ card_data = await client.fetch_card_detail(2862)
 
 ## 📡 API 사용법
 
-### POST `/recommend/natural-language`
+### 사용자 API
+
+#### POST `/recommend/natural-language`
 
 자연어로 소비 패턴을 입력하면 최적의 카드 1장을 추천받습니다.
 
@@ -403,7 +440,7 @@ curl -X POST "http://localhost:8000/recommend/natural-language" \
 }
 ```
 
-### POST `/recommend/structured`
+#### POST `/recommend/structured`
 
 이미 구조화된 UserIntent를 입력하면 바로 검색 단계부터 시작합니다.
 
@@ -425,6 +462,244 @@ curl -X POST "http://localhost:8000/recommend/natural-language" \
   }
 }
 ```
+
+### 관리자 API
+
+운영 중에 카드 데이터를 동적으로 관리할 수 있는 API입니다.
+
+#### GET `/admin/cards/stats`
+
+벡터 DB 통계를 확인합니다.
+
+**요청:**
+```bash
+curl http://localhost:8000/admin/cards/stats
+```
+
+**응답:**
+```json
+{
+  "total_documents": 750,
+  "total_cards": 250,
+  "collection_name": "credit_cards",
+  "chroma_db_path": "chroma_db"
+}
+```
+
+#### POST `/admin/cards/fetch` ⭐ 1단계
+
+카드고릴라 API에서 카드 데이터를 수집하여 JSON 파일로 저장합니다.
+
+**💰 OpenAI 크레딧: 사용 안함** ✅
+
+**파라미터:**
+- `card_ids`: 카드 ID 리스트 (선택사항)
+- `overwrite`: 기존 JSON 파일 덮어쓰기 여부 (기본값: false)
+- `start_id`: card_ids 없을 때 시작 ID (기본값: 1)
+- `end_id`: card_ids 없을 때 종료 ID (기본값: 5000)
+
+**요청:**
+```bash
+# 전체 카드 수집 (1~5000)
+curl -X POST "http://localhost:8000/admin/cards/fetch"
+
+# 범위 지정
+curl -X POST "http://localhost:8000/admin/cards/fetch?start_id=1&end_id=3000"
+
+# 특정 카드만
+curl -X POST "http://localhost:8000/admin/cards/fetch" \
+  -H "Content-Type: application/json" \
+  -d '{"card_ids": [2862, 1357, 2000]}'
+```
+
+**응답:**
+```json
+{
+  "success": true,
+  "message": "1단계 완료: 성공 245개, 실패 5개, 건너뜀 4750개",
+  "summary": {
+    "total_tried": 5000,
+    "success_count": 245,
+    "failed_count": 5,
+    "skipped_count": 4750
+  },
+  "next_step": "POST /admin/cards/embed 를 실행하여 임베딩을 생성하세요"
+}
+```
+
+**동작:**
+1. 카드고릴라 API에서 카드 상세 정보 조회
+2. 단종 카드(`is_discon: true`) 자동 제외
+3. 압축 컨텍스트 생성 및 저장 (`data/cache/ctx/{card_id}.json`)
+
+**특징:**
+- OpenAI 크레딧을 사용하지 않으므로 안전하게 대량 수집 가능
+- 중간에 중단되어도 이미 수집된 JSON 파일은 유지됨
+- 재실행 시 `overwrite=false`면 기존 파일은 건너뜀
+
+#### POST `/admin/cards/embed` ⭐ 2단계
+
+JSON 파일을 읽어서 임베딩을 생성하고 ChromaDB에 저장합니다.
+
+**💰 OpenAI 크레딧: 사용함** ⚠️ (text-embedding-3-small)
+
+**파라미터:**
+- `card_ids`: 카드 ID 리스트 (선택사항, 없으면 모든 JSON 파일 처리)
+- `overwrite`: 기존 임베딩 덮어쓰기 여부 (기본값: false)
+
+**요청:**
+```bash
+# 모든 JSON 파일 처리
+curl -X POST "http://localhost:8000/admin/cards/embed"
+
+# 특정 카드만
+curl -X POST "http://localhost:8000/admin/cards/embed" \
+  -H "Content-Type: application/json" \
+  -d '{"card_ids": [2862, 1357, 2000]}'
+```
+
+**응답:**
+```json
+{
+  "success": true,
+  "message": "2단계 완료: 성공 245개, 실패 0개, 건너뜀 0개",
+  "summary": {
+    "success_count": 245,
+    "failed_count": 0,
+    "skipped_count": 0
+  },
+  "next_step": "GET /admin/cards/stats 로 벡터 DB 상태를 확인하세요"
+}
+```
+
+**동작:**
+1. `data/cache/ctx/{card_id}.json` 파일 읽기
+2. 카드 데이터를 문서(chunk)로 분해 (Summary, Benefit×N, Notes)
+3. OpenAI Embeddings API로 벡터화
+4. ChromaDB에 저장
+
+**특징:**
+- OpenAI 크레딧을 사용하므로 필요한 카드만 선택적으로 처리 가능
+- 1단계(fetch)와 분리되어 있어 임베딩만 다시 생성 가능
+- JSON 파일이 없는 카드는 자동으로 건너뜀
+
+#### POST `/admin/cards/sync` ⭐ 통합
+
+1단계(fetch)와 2단계(embed)를 순차적으로 실행합니다.
+
+**💰 OpenAI 크레딧: 2단계에서 사용** ⚠️
+
+**파라미터:**
+- `card_ids`: 카드 ID 리스트 (선택사항)
+- `overwrite`: 덮어쓰기 여부 (기본값: false)
+- `start_id`: 시작 ID (기본값: 1)
+- `end_id`: 종료 ID (기본값: 5000)
+
+**요청:**
+```bash
+# 전체 동기화 (1~5000)
+curl -X POST "http://localhost:8000/admin/cards/sync"
+
+# 범위 지정
+curl -X POST "http://localhost:8000/admin/cards/sync?start_id=1&end_id=3000"
+```
+
+**응답:**
+```json
+{
+  "success": true,
+  "message": "전체 완료: 수집 245개, 임베딩 245개",
+  "summary": {
+    "total_tried": 5000,
+    "fetch_success": 245,
+    "embed_success": 245
+  },
+  "fetch_results": { ... },
+  "embed_results": { ... }
+}
+```
+
+#### POST `/admin/cards/{card_id}`
+
+특정 카드 1개를 즉시 동기화합니다 (fetch + embed).
+
+**파라미터:**
+- `card_id`: 카드 ID (예: 2862)
+- `overwrite`: 기존 데이터 덮어쓰기 여부 (기본값: false)
+
+**요청:**
+```bash
+# 새 카드 추가
+curl -X POST "http://localhost:8000/admin/cards/2862"
+
+# 기존 카드 업데이트
+curl -X POST "http://localhost:8000/admin/cards/2862?overwrite=true"
+```
+
+#### DELETE `/admin/cards/reset`
+
+벡터 DB의 모든 데이터를 삭제하고 초기화합니다.
+
+**⚠️ 주의: 되돌릴 수 없는 작업입니다!**
+
+**요청:**
+```bash
+curl -X DELETE "http://localhost:8000/admin/cards/reset"
+```
+
+**응답:**
+```json
+{
+  "success": true,
+  "message": "벡터 DB가 초기화되었습니다.",
+  "deleted_documents": 750,
+  "collection_name": "credit_cards"
+}
+```
+
+**동작:**
+1. ChromaDB 컬렉션 삭제
+2. 새 컬렉션 생성
+3. 벡터 스토어 재초기화
+
+**참고:** JSON 파일(`data/cache/ctx/*.json`)은 삭제되지 않으므로, 다시 `POST /admin/cards/embed`로 복구 가능합니다.
+
+### 관리자 API 사용 시나리오
+
+1. **초기 설정 (단계별)**: 카드 데이터 수집 → 임베딩 생성
+   ```bash
+   # 1단계: 데이터 수집 (크레딧 안씀)
+   curl -X POST "http://localhost:8000/admin/cards/fetch"
+   
+   # 2단계: 임베딩 생성 (크레딧 사용)
+   curl -X POST "http://localhost:8000/admin/cards/embed"
+   ```
+
+2. **초기 설정 (한번에)**: fetch + embed 자동 실행
+   ```bash
+   curl -X POST "http://localhost:8000/admin/cards/sync"
+   ```
+
+3. **신규 카드 추가**: 새로운 카드가 출시되면 추가
+   ```bash
+   curl -X POST "http://localhost:8000/admin/cards/3000"
+   ```
+
+4. **카드 정보 갱신**: 혜택이 변경된 카드를 업데이트
+   ```bash
+   curl -X POST "http://localhost:8000/admin/cards/2862?overwrite=true"
+   ```
+
+5. **통계 확인**: 현재 벡터 DB 상태 확인
+   ```bash
+   curl http://localhost:8000/admin/cards/stats
+   ```
+
+6. **벡터 DB 재구성**: 초기화 후 JSON 파일로 재생성
+   ```bash
+   curl -X DELETE "http://localhost:8000/admin/cards/reset"
+   curl -X POST "http://localhost:8000/admin/cards/embed"
+   ```
 
 ## ✅ 운영 규칙 및 주의사항
 

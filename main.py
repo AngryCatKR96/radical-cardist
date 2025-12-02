@@ -135,24 +135,37 @@ async def recommend_natural_language(user_input: str = Body(..., embed=True)):
             )
         
         # 1. 입력 파싱
+        print(f"\n[INFO] Step 1: Input Parsing")
+        print(f"Input: {user_input}")
         user_intent = input_parser.parse(user_input)
+        print(f"Parsed Intent: {user_intent}")
         
         # 2. 벡터 검색 (Top-M 후보 선정)
         query_text = user_intent.get("query_text", user_input)
         filters = user_intent.get("filters", {})
+        print(f"\n[INFO] Step 2: Vector Search")
+        print(f"Query: {query_text}")
+        print(f"Filters: {filters}")
+        
         candidates = vector_store.search_cards(query_text, filters, top_m=5)
+        print(f"Candidates Found: {len(candidates)}")
+        for i, c in enumerate(candidates):
+            print(f"  [{i+1}] ID: {c.get('card_id')} (Score: {c.get('score')})")
         
         if not candidates:
+            print("[INFO] No candidates found. Returning error.")
             return {
                 "error": "조건에 맞는 카드를 찾을 수 없습니다.",
                 "recommendation_text": "죄송합니다. 입력하신 조건에 맞는 카드를 찾을 수 없습니다. 다른 조건으로 시도해보세요."
             }
         
         # 3. 혜택 분석
+        print(f"\n[INFO] Step 3: Benefit Analysis")
         user_pattern = {
             "spending": user_intent.get("spending", {}),
             "preferences": user_intent.get("preferences", {})
         }
+        print(f"User Pattern: {user_pattern}")
         
         card_contexts = [
             {
@@ -163,18 +176,24 @@ async def recommend_natural_language(user_input: str = Body(..., embed=True)):
         ]
         
         analysis_results = benefit_analyzer.analyze_batch(user_pattern, card_contexts)
+        print(f"Analysis Results: {len(analysis_results)} cards analyzed")
         
         # 4. 최종 선택
+        print(f"\n[INFO] Step 4: Final Selection")
         recommendation_result = recommender.select_best_card(
             analysis_results,
             user_preferences=user_intent.get("preferences")
         )
+        print(f"Selected Card ID: {recommendation_result.get('selected_card')}")
+        print(f"Net Benefit: {recommendation_result.get('score_breakdown', {}).get('net_benefit')}")
         
         # 5. 응답 생성
+        print(f"\n[INFO] Step 5: Response Generation")
         recommendation_text = response_generator.generate(
             recommendation_result,
             user_pattern=user_pattern
         )
+        print("Response generated successfully.")
         
         return {
             "recommendation_text": recommendation_text,

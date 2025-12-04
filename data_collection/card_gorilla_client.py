@@ -10,7 +10,7 @@ import json
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple, Union
 import httpx
 from dotenv import load_dotenv
 
@@ -72,7 +72,12 @@ class CardGorillaClient:
         self.rate_limiter = RateLimiter(max_requests=5, time_window=1)
         self.timeout = httpx.Timeout(30.0, connect=10.0)
     
-    async def fetch_card_detail(self, card_id: int, use_cache: bool = True) -> Optional[Dict]:
+    async def fetch_card_detail(
+        self,
+        card_id: int,
+        use_cache: bool = True,
+        return_reason: bool = False
+    ) -> Union[Optional[Dict], Tuple[Optional[Dict], Optional[str]]]:
         """
         카드 상세 정보 조회
         
@@ -84,12 +89,20 @@ class CardGorillaClient:
             카드 데이터 (Dict) 또는 None (404 등)
         """
         cache_file = self.cache_dir / f"{card_id}.json"
+        reason: Optional[str] = None
+
+        def _response(value: Optional[Dict], override_reason: Optional[str] = None):
+            final_reason = override_reason if override_reason is not None else reason
+            if return_reason:
+                return value, final_reason
+            return value
         
         # 캐시 확인
         if use_cache and cache_file.exists():
             try:
                 with open(cache_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    return _response(data)
             except Exception as e:
                 print(f"⚠️  캐시 로드 실패 (card_id={card_id}): {e}")
         
@@ -106,8 +119,9 @@ class CardGorillaClient:
                     response = await client.get(url)
                     
                     if response.status_code == 404:
+                        reason = "not_found"
                         print(f"⚠️  카드를 찾을 수 없음 (card_id={card_id})")
-                        return None
+                        return _response(None)
                     
                     if response.status_code == 429:
                         wait_time = 60 * (2 ** attempt)  # 지수 백오프
@@ -120,8 +134,9 @@ class CardGorillaClient:
                     
                     # 단종 카드 제외
                     if data.get("is_discon", False):
+                        reason = "discontinued"
                         print(f"⏭️  단종 카드 제외 (card_id={card_id})")
-                        return None
+                        return _response(None)
                     
                     # 압축 컨텍스트로 변환 및 저장
                     compressed = self._compress_context(data)
@@ -130,35 +145,40 @@ class CardGorillaClient:
                             json.dump(compressed, f, ensure_ascii=False, indent=2)
                         print(f"✅ 카드 저장 완료 (card_id={card_id})")
                     
-                    return compressed
+                    reason = None
+                    return _response(compressed)
                     
             except httpx.TimeoutException:
+                reason = "timeout"
                 if attempt < max_retries - 1:
                     wait_time = 2 ** attempt
                     print(f"⏳ 타임아웃, {wait_time}초 후 재시도... (card_id={card_id})")
                     await asyncio.sleep(wait_time)
                 else:
                     print(f"❌ 타임아웃 (card_id={card_id})")
-                    return None
+                    return _response(None)
                     
             except httpx.HTTPStatusError as e:
                 if e.response.status_code >= 500:
+                    reason = f"server_error_{e.response.status_code}"
                     if attempt < max_retries - 1:
                         wait_time = 2 ** attempt
                         print(f"⏳ 서버 오류, {wait_time}초 후 재시도... (card_id={card_id})")
                         await asyncio.sleep(wait_time)
                     else:
                         print(f"❌ 서버 오류 (card_id={card_id}): {e.response.status_code}")
-                        return None
+                        return _response(None)
                 else:
+                    reason = f"http_error_{e.response.status_code}"
                     print(f"❌ HTTP 오류 (card_id={card_id}): {e.response.status_code}")
-                    return None
+                    return _response(None)
                     
             except Exception as e:
+                reason = "unexpected_error"
                 print(f"❌ 예상치 못한 오류 (card_id={card_id}): {e}")
-                return None
+                return _response(None)
         
-        return None
+        return _response(None)
     
     async def fetch_cards_batch(self, card_ids: List[int], use_cache: bool = True) -> Dict[int, Dict]:
         """

@@ -120,27 +120,54 @@ python main.py
 
 **서비스를 실행한 후, 반드시 카드 데이터를 동기화해야 합니다!**
 
-별도 터미널을 열어 실행하세요:
+#### 방법 A) FastAPI 관리자 API 사용
 
 ```bash
-# 전체 카드 동기화 (data/cards.json 기반)
+# 전체 카드 동기화 (fetch + embed)
 curl -X POST "http://localhost:8000/admin/cards/sync"
 
 # 동기화 상태 확인
 curl http://localhost:8000/admin/cards/stats
 ```
 
-**또는 특정 카드만 먼저 테스트:**
+선택적으로 특정 카드만 테스트할 수도 있습니다.
+
 ```bash
-# 단일 카드로 빠른 테스트
+# 단일 카드만 즉시 동기화
 curl -X POST "http://localhost:8000/admin/cards/2862"
 ```
 
-**참고:**
-- 동기화는 백그라운드로 처리되므로 즉시 응답이 반환됩니다
-- 진행 상황은 서버 로그에서 확인할 수 있습니다
-- 전체 동기화는 카드 수에 따라 몇 분 소요될 수 있습니다
-- **동기화 없이는 추천 API가 작동하지 않습니다** (벡터 DB가 비어있음)
+#### 방법 B) CLI 스크립트 사용 (서버 미실행 상태에서도 가능)
+
+1. **카드 데이터 수집** – 카드고릴라 → JSON 캐시  
+   ```bash
+   # 기본 범위 1~4000, 단종/미존재 카드는 script/skipped_cards.json에 기록되며 이 카드들에 대한 스크래핑은 건너뜁니다.
+   python script/fetch_cardgorilla_range.py 
+   # 커스텀 범위 1000 ~ 6000도 가능합니다.
+   python script/fetch_cardgorilla_range.py --start 1000 --end 6000
+   # 특정 카드만
+   python script/fetch_cardgorilla_range.py --card-ids 2862,1357 --overwrite
+   ```
+   - 재실행 시 `script/skipped_cards.json`을 참고하여 이미 단종/404인 카드는 자동으로 건너뜁니다.
+   - JSON은 `data/cache/ctx/{card_id}.json`에 저장되며, 이후 대화 테스트 전에도 이 스크립트를 돌려 최신 데이터를 확보할 수 있습니다.
+
+2. **임베딩 생성** – JSON → ChromaDB (`credit_cards` 컬렉션)  
+   ```bash
+   # 모든 JSON을 임베딩
+   python script/embed_chromadb.py
+   # 범위 또는 ID 지정
+   python script/embed_chromadb.py --start 1 --end 4000 --overwrite
+   python script/embed_chromadb.py --card-ids 2862,1357
+   ```
+   - `.env`의 `OPENAI_API_KEY`가 필요하며 OpenAI 크레딧이 소모됩니다.
+   - FastAPI 서버와 동일한 `vector_store/embeddings.py` 로직을 사용하므로, 서버를 켜기 전에 데이터베이스를 채우고 싶을 때 유용합니다.
+
+> **TIP**: 사용자 대화 플로우를 테스트할 때도 위 두 스크립트를 먼저 실행해 두면, 서버를 재시작하더라도 RAG/Agentic 서비스가 즉시 카드 데이터를 사용할 수 있습니다.
+
+**참고**
+- 동기화는 (API든 스크립트든) 카드 수에 따라 시간이 걸릴 수 있습니다.
+- 진행 상황은 각각의 터미널 출력에서 확인 가능합니다.
+- **동기화가 완료되지 않으면 추천 API가 작동하지 않습니다.**
 
 ### 6단계: 서비스 테스트
 

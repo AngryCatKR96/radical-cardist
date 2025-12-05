@@ -64,17 +64,54 @@ def menu_recommend_natural_language() -> None:
     if not data:
         return
 
-    # 추천 요약만 깔끔하게 한 번 더 보여주기
+    if "detail" in data and "card" not in data:
+        print(f"\n[오류] {data['detail']}\n")
+        return
+
+    card = data.get("card") or {}
+    analysis = data.get("analysis") or {}
+    explanation = data.get("explanation", "")
+
+    if not card:
+        print("\n응답에 카드 정보가 없습니다. 서버 로그를 확인해주세요.\n")
+        return
+
     print("\n----- 요약 -----")
-    rec_text = data.get("recommendation_text")
-    if rec_text:
-        print(textwrap.fill(rec_text, width=80))
-    selected_card = data.get("selected_card") or {}
-    if selected_card:
-        print("\n[선택된 카드]")
-        print(f"- 카드 ID : {selected_card.get('card_id')}")
-        print(f"- 이름     : {selected_card.get('name')}")
-        print(f"- 발급사   : {selected_card.get('issuer')}")
+    print("[추천 카드]")
+    print(f"- 이름       : {card.get('name', 'N/A')}")
+    print(f"- 브랜드     : {card.get('brand', 'N/A')}")
+    print(f"- 카드 ID    : {card.get('id', 'N/A')}")
+    print(f"- 연회비     : {card.get('annual_fee', '정보 없음')}")
+    print(f"- 전월 실적  : {card.get('required_spend', '정보 없음')}")
+    print(f"- 월 절약액  : {card.get('monthly_savings', 0):,}원")
+    print(f"- 연 절약액  : {card.get('annual_savings', 0):,}원")
+    print(f"- 순 혜택    : {analysis.get('net_benefit', 0):,}원")
+
+    benefits = card.get("benefits") or []
+    if benefits:
+        print("\n[주요 혜택]")
+        for benefit in benefits:
+            print(f"- {benefit}")
+
+    if explanation:
+        print("\n[추천 이유]")
+        print(textwrap.fill(explanation, width=80))
+
+    warnings = analysis.get("warnings") or []
+    if warnings:
+        print("\n[주의 사항]")
+        for warning in warnings:
+            print(f"- {warning}")
+
+    breakdown = analysis.get("category_breakdown") or {}
+    if breakdown:
+        print("\n[카테고리별 예상 절약액]")
+        for category, amount in breakdown.items():
+            print(f"- {category}: {amount:,}원/월")
+
+    if not analysis.get("conditions_met", True):
+        print("\n⚠️  전월 실적 조건을 충족하지 못할 수 있으니 다시 한번 확인해주세요.")
+
     print("----------------\n")
 
 

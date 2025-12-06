@@ -104,46 +104,54 @@ def test_natural_language_recommendation(limit_cases=None):
         try:
             response = requests.post(
                 f"{BASE_URL}/recommend/natural-language",
-                json=user_input,  # FastAPI는 문자열을 JSON으로 받음
+                json={"user_input": user_input},
                 headers={"Content-Type": "application/json"}
             )
             
             if response.status_code == 200:
                 data = response.json()
-                
-                if "error" in data:
-                    print(f"    [WARN] {data.get('error', '알 수 없는 오류')}")
-                    if "recommendation_text" in data:
-                        print(f"    메시지: {data['recommendation_text']}")
-                else:
-                    print(f"    [OK] 추천 성공!")
-                    print(f"    추천 카드: {data.get('selected_card', {}).get('name', 'N/A')} (ID: {data.get('selected_card', {}).get('card_id', 'N/A')})")
-                    print(f"    연 절약액: {data.get('annual_savings', 0):,}원")
-                    print(f"    월 절약액: {data.get('monthly_savings', 0):,}원")
-                    print(f"    연회비: {data.get('annual_fee', 0):,}원")
-                    print(f"    순 혜택: {data.get('net_benefit', 0):,}원")
-                    
-                    analysis = data.get('analysis_details', {})
-                    if analysis.get('warnings'):
-                        print(f"    주의사항: {', '.join(analysis['warnings'])}")
-                    
-                    if analysis.get('category_breakdown'):
-                        print(f"    카테고리별 절약:")
-                        for cat, amount in analysis['category_breakdown'].items():
-                            print(f"      - {cat}: {amount:,}원/월")
-                    
-                    # 추천 텍스트 일부만 표시
-                    rec_text = data.get('recommendation_text', '')
-                    if rec_text:
-                        lines = rec_text.split('\n')[:3]
-                        print(f"    추천 요약:")
-                        for line in lines:
-                            if line.strip():
-                                print(f"      {line.strip()}")
+                card = data.get('card', {})
+                analysis = data.get('analysis', {})
+
+                print(f"    [OK] 추천 성공!")
+                print(
+                    f"    추천 카드: {card.get('name', 'N/A')} ({card.get('brand', '-')})"
+                    f" - ID: {card.get('id', 'N/A')}"
+                )
+                print(f"    연 절약액: {card.get('annual_savings', 0):,}원")
+                print(f"    월 절약액: {card.get('monthly_savings', 0):,}원")
+                print(f"    연회비: {card.get('annual_fee', '정보 없음')}")
+                print(f"    전월 실적: {card.get('required_spend', '정보 없음')}")
+                print(f"    순 혜택: {analysis.get('net_benefit', 0):,}원")
+
+                if card.get('benefits'):
+                    print("    주요 혜택:")
+                    for benefit in card['benefits']:
+                        print(f"      - {benefit}")
+
+                if analysis.get('warnings'):
+                    print(f"    주의사항: {', '.join(analysis['warnings'])}")
+
+                if analysis.get('category_breakdown'):
+                    print(f"    카테고리별 절약:")
+                    for cat, amount in analysis['category_breakdown'].items():
+                        print(f"      - {cat}: {amount:,}원/월")
+
+                # 추천 텍스트 일부만 표시
+                explanation = data.get('explanation', '')
+                if explanation:
+                    lines = explanation.split('\n')[:3]
+                    print(f"    추천 요약:")
+                    for line in lines:
+                        if line.strip():
+                            print(f"      {line.strip()}")
             elif response.status_code == 503:
                 print(f"    [WARN] 서비스 초기화 필요: {response.json().get('detail', 'RAG + Agentic 서비스가 준비되지 않았습니다.')}")
                 print(f"    힌트: 벡터 DB에 데이터가 있는지 확인하세요.")
                 print(f"    데이터 동기화: POST {BASE_URL}/admin/cards/sync")
+            elif response.status_code in (400, 404):
+                detail = response.json().get('detail', response.text)
+                print(f"    [WARN] 추천 실패: {detail}")
             else:
                 print(f"    [FAIL] 요청 실패: {response.status_code}")
                 try:
@@ -253,76 +261,6 @@ def test_admin_sync_single():
     except Exception as e:
         print(f"    [FAIL] 오류 발생: {str(e)}")
         return False
-
-
-def main():
-    """자연어 입력 기반 카드 추천 테스트"""
-    print("\n[TEST] 자연어 입력 기반 카드 추천 테스트 중...")
-    
-    test_inputs = [
-        "마트 30만원, 넷플릭스/유튜브 구독, 간편결제 자주 씀. 연회비 2만원 이하, 체크카드 선호.",
-        "온라인쇼핑 많이 해요. 월 50만원 정도. 연회비 없으면 좋겠어요.",
-        "카페에서 일주일에 3-4번 가고, 편의점도 자주 이용해요. 월 10만원 정도."
-    ]
-    
-    for i, user_input in enumerate(test_inputs, 1):
-        print(f"\n  테스트 케이스 {i}: {user_input[:50]}...")
-        try:
-            response = requests.post(
-                f"{BASE_URL}/recommend/natural-language",
-                json=user_input,  # FastAPI는 문자열을 JSON으로 받음
-                headers={"Content-Type": "application/json"}
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                if "error" in data:
-                    print(f"    [WARN] {data.get('error', '알 수 없는 오류')}")
-                    if "recommendation_text" in data:
-                        print(f"    메시지: {data['recommendation_text']}")
-                else:
-                    print(f"    [OK] 추천 성공!")
-                    print(f"    추천 카드: {data.get('selected_card', {}).get('name', 'N/A')} (ID: {data.get('selected_card', {}).get('card_id', 'N/A')})")
-                    print(f"    연 절약액: {data.get('annual_savings', 0):,}원")
-                    print(f"    월 절약액: {data.get('monthly_savings', 0):,}원")
-                    print(f"    연회비: {data.get('annual_fee', 0):,}원")
-                    print(f"    순 혜택: {data.get('net_benefit', 0):,}원")
-                    
-                    analysis = data.get('analysis_details', {})
-                    if analysis.get('warnings'):
-                        print(f"    주의사항: {', '.join(analysis['warnings'])}")
-                    
-                    if analysis.get('category_breakdown'):
-                        print(f"    카테고리별 절약:")
-                        for cat, amount in analysis['category_breakdown'].items():
-                            print(f"      - {cat}: {amount:,}원/월")
-                    
-                    # 추천 텍스트 일부만 표시
-                    rec_text = data.get('recommendation_text', '')
-                    if rec_text:
-                        lines = rec_text.split('\n')[:3]
-                        print(f"    추천 요약:")
-                        for line in lines:
-                            if line.strip():
-                                print(f"      {line.strip()}")
-            elif response.status_code == 503:
-                print(f"    [WARN] 서비스 초기화 필요: {response.json().get('detail', 'RAG + Agentic 서비스가 준비되지 않았습니다.')}")
-                print(f"    힌트: 벡터 DB에 데이터가 있는지 확인하세요.")
-            else:
-                print(f"    [FAIL] 요청 실패: {response.status_code}")
-                try:
-                    error_detail = response.json().get('detail', response.text)
-                    print(f"    오류 상세: {error_detail}")
-                except:
-                    print(f"    응답: {response.text[:200]}")
-                    
-        except Exception as e:
-            print(f"    [FAIL] 오류 발생: {str(e)}")
-        
-        # 요청 간 딜레이
-        if i < len(test_inputs):
-            time.sleep(1)
 
 
 def main():

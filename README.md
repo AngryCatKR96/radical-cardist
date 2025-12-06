@@ -444,25 +444,38 @@ card_data = await client.fetch_card_detail(2862)
 ```bash
 curl -X POST "http://localhost:8000/recommend/natural-language" \
   -H "Content-Type: application/json" \
-  -d '"마트 30만원, 넷플릭스/유튜브 구독, 간편결제 자주 씀. 연회비 2만원 이하, 체크카드 선호."'
+  -d '{
+    "user_input": "마트 30만원, 넷플릭스/유튜브 구독, 간편결제 자주 씀. 연회비 2만원 이하, 체크카드 선호."
+  }'
 ```
 
 **응답:**
 ```json
 {
-  "recommendation_text": "추천 카드: MG+ S 하나카드\n\n이유: 간편결제 10%가 사용자 소비 패턴(간편결제 20만원)에 가장 크게 기여합니다...",
-  "selected_card": {
-    "card_id": 2862,
+  "card": {
+    "id": "2862",
     "name": "MG+ S 하나카드",
-    "issuer": "MG새마을금고"
+    "brand": "MG새마을금고",
+    "annual_fee": "국내전용 10,000원 / 해외겸용 17,000원",
+    "required_spend": "전월 실적 30만원 이상",
+    "benefits": [
+      "간편결제/페이에서 월 18,000원 혜택",
+      "OTT 구독료 월 5,000원 절약"
+    ],
+    "monthly_savings": 18000,
+    "annual_savings": 216000
   },
-  "annual_savings": 216000,
-  "monthly_savings": 18000,
-  "analysis_details": {
-    "warnings": ["통합할인한도 초과 시 혜택 제한"],
+  "explanation": "간편결제 비중이 높은 소비 패턴과 카드 핵심 혜택이 정확히 맞아떨어집니다!",
+  "analysis": {
+    "annual_savings": 216000,
+    "monthly_savings": 18000,
+    "net_benefit": 199000,
+    "annual_fee": 17000,
+    "warnings": ["통합 할인한도 초과 시 혜택이 줄어듭니다."],
     "category_breakdown": {
       "digital_payment": 18000
-    }
+    },
+    "conditions_met": true
   }
 }
 ```

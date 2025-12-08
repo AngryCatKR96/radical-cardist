@@ -233,6 +233,8 @@ async def recommend_natural_language(payload: NaturalLanguageRequest):
     4. 최종 1장 선택 (Recommender)
     5. 응답 생성 (Response Generator)
     """
+    import time
+    
     try:
         user_input = payload.user_input.strip()
 
@@ -242,25 +244,40 @@ async def recommend_natural_language(payload: NaturalLanguageRequest):
                 detail="RAG + Agentic 서비스를 사용할 수 없습니다. 서비스 초기화를 확인해주세요."
             )
         
+        # 전체 처리 시작 시간
+        total_start_time = time.perf_counter()
+        print(f"\n[PERF] ========== 전체 처리 시작 ==========")
+        
         # 1. 입력 파싱
+        step1_start = time.perf_counter()
         print(f"\n[INFO] Step 1: Input Parsing")
+        print(f"[PERF] Step 1 시작")
         print(f"Input: {user_input}")
         user_intent = input_parser.parse(user_input)
+        step1_end = time.perf_counter()
+        step1_time = step1_end - step1_start
         print(f"Parsed Intent: {user_intent}")
+        print(f"[PERF] Step 1 완료: {step1_time:.3f}초")
         
         # 2. 벡터 검색 (Top-M 후보 선정)
+        step2_start = time.perf_counter()
         query_text = user_intent.get("query_text", user_input)
         filters = user_intent.get("filters", {})
         print(f"\n[INFO] Step 2: Vector Search")
+        print(f"[PERF] Step 2 시작")
         print(f"Query: {query_text}")
         print(f"Filters: {filters}")
         
         candidates = vector_store.search_cards(query_text, filters, top_m=5)
+        step2_end = time.perf_counter()
+        step2_time = step2_end - step2_start
         print(f"Candidates Found: {len(candidates)}")
         for i, c in enumerate(candidates):
             print(f"  [{i+1}] ID: {c.get('card_id')} (Score: {c.get('score')})")
+        print(f"[PERF] Step 2 완료: {step2_time:.3f}초")
         
         if not candidates:
+            total_time = time.perf_counter() - total_start_time
             print("[INFO] No candidates found. Returning error.")
             raise HTTPException(
                 status_code=404,
@@ -268,7 +285,9 @@ async def recommend_natural_language(payload: NaturalLanguageRequest):
             )
         
         # 3. 혜택 분석
+        step3_start = time.perf_counter()
         print(f"\n[INFO] Step 3: Benefit Analysis")
+        print(f"[PERF] Step 3 시작")
         user_pattern = {
             "spending": user_intent.get("spending", {}),
             "preferences": user_intent.get("preferences", {})
@@ -284,24 +303,43 @@ async def recommend_natural_language(payload: NaturalLanguageRequest):
         ]
         
         analysis_results = benefit_analyzer.analyze_batch(user_pattern, card_contexts)
+        step3_end = time.perf_counter()
+        step3_time = step3_end - step3_start
         print(f"Analysis Results: {len(analysis_results)} cards analyzed")
+        print(f"[PERF] Step 3 완료: {step3_time:.3f}초")
         
         # 4. 최종 선택
+        step4_start = time.perf_counter()
         print(f"\n[INFO] Step 4: Final Selection")
+        print(f"[PERF] Step 4 시작")
         recommendation_result = recommender.select_best_card(
             analysis_results,
             user_preferences=user_intent.get("preferences")
         )
+        step4_end = time.perf_counter()
+        step4_time = step4_end - step4_start
         print(f"Selected Card ID: {recommendation_result.get('selected_card')}")
         print(f"Net Benefit: {recommendation_result.get('score_breakdown', {}).get('net_benefit')}")
+        print(f"[PERF] Step 4 완료: {step4_time:.3f}초")
         
         # 5. 응답 생성
+        step5_start = time.perf_counter()
         print(f"\n[INFO] Step 5: Response Generation")
+        print(f"[PERF] Step 5 시작")
         recommendation_text = response_generator.generate(
             recommendation_result,
             user_pattern=user_pattern
         )
+        step5_end = time.perf_counter()
+        step5_time = step5_end - step5_start
         print("Response generated successfully.")
+        print(f"[PERF] Step 5 완료: {step5_time:.3f}초")
+        
+        # 전체 처리 완료
+        total_end_time = time.perf_counter()
+        total_time = total_end_time - total_start_time
+        print(f"\n[PERF] ========== 전체 처리 완료: {total_time:.3f}초 ==========")
+        print(f"[PERF] 단계별 시간: Step1={step1_time:.3f}s, Step2={step2_time:.3f}s, Step3={step3_time:.3f}s, Step4={step4_time:.3f}s, Step5={step5_time:.3f}s")
         
         selected_card_id = recommendation_result["selected_card"]
         card_context = load_compressed_context(selected_card_id)

@@ -5,7 +5,8 @@ from contextlib import asynccontextmanager
 import uvicorn
 import os
 from dotenv import load_dotenv
-from typing import List, Optional
+from pydantic import BaseModel, Field
+from typing import Dict, List, Optional
 
 # 새로운 RAG + Agentic 모듈
 from agents.input_parser import InputParser
@@ -15,6 +16,7 @@ from agents.response_generator import ResponseGenerator
 from vector_store.vector_store import CardVectorStore
 from vector_store.embeddings import EmbeddingGenerator
 from data_collection.card_gorilla_client import CardGorillaClient
+from data_collection.data_parser import load_compressed_context
 
 # 환경 변수 로드
 load_dotenv()
@@ -27,6 +29,106 @@ response_generator = None
 vector_store = None
 embedding_generator = None
 card_client = None
+
+
+CATEGORY_LABELS = {
+    "digital_payment": "간편결제/페이",
+    "grocery": "마트/식료품",
+    "subscription_video": "OTT 구독",
+    "subscription_music": "음악/콘텐츠",
+    "subscription": "구독 서비스",
+    "online_shopping": "온라인 쇼핑",
+    "travel": "여행/항공",
+    "airline": "항공 마일리지",
+    "cafe": "카페",
+    "coffee": "카페",
+    "convenience_store": "편의점",
+    "dining": "외식",
+    "fuel": "주유",
+    "transportation": "교통",
+    "delivery": "배달앱",
+    "public_utilities": "공과금",
+    "education": "교육",
+    "mobile_payment": "모바일 결제"
+}
+
+
+class NaturalLanguageRequest(BaseModel):
+    """사용자 자연어 입력"""
+
+    user_input: str = Field(
+        ...,
+        min_length=15,
+        description="소비 패턴을 설명하는 자연어 문장 (최소 15자)"
+    )
+
+
+class RecommendationCard(BaseModel):
+    """추천 카드 정보"""
+
+    id: str = Field(..., description="카드 식별자 (문자열)")
+    name: str = Field(..., description="카드 이름")
+    brand: str = Field(..., description="카드 브랜드/발급사")
+    annual_fee: str = Field(..., description="연회비 정보 (문장)")
+    required_spend: str = Field(..., description="전월 실적 조건")
+    benefits: List[str] = Field(default_factory=list, description="주요 혜택 목록")
+    monthly_savings: int = Field(..., description="예상 월 절약액 (원)")
+    annual_savings: int = Field(..., description="예상 연 절약액 (원)")
+    homepage_url: Optional[str] = Field(
+        default=None,
+        description="카드 상세 페이지 URL"
+    )
+
+
+class RecommendationAnalysis(BaseModel):
+    """추천 분석 메타 정보"""
+
+    annual_savings: int
+    monthly_savings: int
+    net_benefit: int
+    annual_fee: int
+    warnings: List[str] = Field(default_factory=list)
+    category_breakdown: Dict[str, int] = Field(default_factory=dict)
+    conditions_met: bool = False
+
+
+class RecommendResponse(BaseModel):
+    """최종 추천 응답"""
+
+    card: RecommendationCard
+    explanation: str = Field(..., description="이 카드를 추천한 이유")
+    analysis: RecommendationAnalysis
+
+
+def _format_currency(amount: int) -> str:
+    """세 자리마다 콤마를 넣어 표시"""
+    return f"{amount:,}"
+
+
+def _format_required_spend(amount: Optional[int]) -> str:
+    if not amount:
+        return "전월 실적 조건 없음"
+    return f"전월 실적 {_format_currency(int(amount))}원 이상"
+
+
+def _category_label(category_key: str) -> str:
+    if category_key in CATEGORY_LABELS:
+        return CATEGORY_LABELS[category_key]
+    return category_key.replace("_", " ").title()
+
+
+def _build_benefit_highlights(category_breakdown: Dict[str, int], fallback_titles: List[str]) -> List[str]:
+    highlights = []
+    for category, amount in category_breakdown.items():
+        if amount <= 0:
+            continue
+        label = _category_label(category)
+        highlights.append(f"{label}에서 월 {_format_currency(amount)}원 혜택 예상")
+
+    if not highlights:
+        highlights = fallback_titles[:3]
+
+    return highlights or ["혜택 정보를 불러오지 못했습니다. 카드 상세 페이지를 확인해주세요."]
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -111,8 +213,12 @@ async def health_check():
 
 # ========== 새로운 RAG + Agentic 엔드포인트 ==========
 
-@app.post("/recommend/natural-language")
-async def recommend_natural_language(user_input: str = Body(..., embed=True)):
+@app.post(
+    "/recommend/natural-language",
+    response_model=RecommendResponse,
+    summary="자연어 소비 패턴으로 카드 추천"
+)
+async def recommend_natural_language(payload: NaturalLanguageRequest):
     """
     자연어 입력 기반 카드 추천
     
@@ -130,6 +236,8 @@ async def recommend_natural_language(user_input: str = Body(..., embed=True)):
     import time
     
     try:
+        user_input = payload.user_input.strip()
+
         if not all([input_parser, benefit_analyzer, recommender, response_generator, vector_store]):
             raise HTTPException(
                 status_code=503,
@@ -171,11 +279,10 @@ async def recommend_natural_language(user_input: str = Body(..., embed=True)):
         if not candidates:
             total_time = time.perf_counter() - total_start_time
             print("[INFO] No candidates found. Returning error.")
-            print(f"[PERF] ========== 전체 처리 완료: {total_time:.3f}초 ==========")
-            return {
-                "error": "조건에 맞는 카드를 찾을 수 없습니다.",
-                "recommendation_text": "죄송합니다. 입력하신 조건에 맞는 카드를 찾을 수 없습니다. 다른 조건으로 시도해보세요."
-            }
+            raise HTTPException(
+                status_code=404,
+                detail="조건에 맞는 카드를 찾을 수 없습니다. 연회비/전월실적 조건을 완화해 다시 시도해보세요."
+            )
         
         # 3. 혜택 분석
         step3_start = time.perf_counter()
@@ -234,22 +341,74 @@ async def recommend_natural_language(user_input: str = Body(..., embed=True)):
         print(f"\n[PERF] ========== 전체 처리 완료: {total_time:.3f}초 ==========")
         print(f"[PERF] 단계별 시간: Step1={step1_time:.3f}s, Step2={step2_time:.3f}s, Step3={step3_time:.3f}s, Step4={step4_time:.3f}s, Step5={step5_time:.3f}s")
         
-        return {
-            "recommendation_text": recommendation_text,
-            "selected_card": {
-                "card_id": recommendation_result["selected_card"],
-                "name": recommendation_result.get("name", "")
-            },
-            "annual_savings": recommendation_result.get("annual_savings", 0),
-            "monthly_savings": recommendation_result.get("annual_savings", 0) // 12,
-            "annual_fee": recommendation_result.get("annual_fee", 0),
-            "net_benefit": recommendation_result.get("score_breakdown", {}).get("net_benefit", 0),
-            "analysis_details": {
-                "warnings": recommendation_result.get("warnings", []),
-                "category_breakdown": recommendation_result.get("category_breakdown", {}),
-                "conditions_met": recommendation_result.get("conditions_met", False)
-            }
-        }
+        selected_card_id = recommendation_result["selected_card"]
+        card_context = load_compressed_context(selected_card_id)
+        if not card_context:
+            raise HTTPException(
+                status_code=500,
+                detail="카드 메타데이터를 불러오지 못했습니다. 관리자에게 문의해주세요."
+            )
+
+        meta = card_context.get("meta", {})
+        conditions = card_context.get("conditions", {})
+        fees = card_context.get("fees", {})
+        hints = card_context.get("hints", {})
+
+        annual_savings = int(recommendation_result.get("annual_savings", 0))
+        monthly_savings = annual_savings // 12 if annual_savings > 0 else 0
+        score_breakdown = recommendation_result.get("score_breakdown", {})
+        net_benefit = int(score_breakdown.get("net_benefit", 0))
+        annual_fee_amount = int(recommendation_result.get("annual_fee", 0))
+
+        brand_candidates = hints.get("brands", [])
+        brand = (
+            brand_candidates[0]
+            if brand_candidates
+            else meta.get("issuer", "정보 없음")
+        )
+
+        annual_fee_text = (
+            fees.get("annual_detail")
+            or fees.get("annual_basic")
+            or (f"{_format_currency(annual_fee_amount)}원" if annual_fee_amount else "연회비 정보 확인 필요")
+        )
+
+        required_spend = _format_required_spend(conditions.get("prev_month_min"))
+        category_breakdown = recommendation_result.get("category_breakdown", {})
+        benefit_highlights = _build_benefit_highlights(
+            category_breakdown,
+            hints.get("top_titles", [])
+        )
+
+        card_payload = RecommendationCard(
+            id=str(selected_card_id),
+            name=recommendation_result.get("name", meta.get("name", "")),
+            brand=brand,
+            annual_fee=annual_fee_text,
+            required_spend=required_spend,
+            benefits=benefit_highlights,
+            monthly_savings=monthly_savings,
+            annual_savings=annual_savings,
+            homepage_url=None
+        )
+
+        analysis_payload = RecommendationAnalysis(
+            annual_savings=annual_savings,
+            monthly_savings=monthly_savings,
+            net_benefit=net_benefit,
+            annual_fee=annual_fee_amount,
+            warnings=recommendation_result.get("warnings", []),
+            category_breakdown=category_breakdown,
+            conditions_met=recommendation_result.get("conditions_met", False)
+        )
+
+        response = RecommendResponse(
+            card=card_payload,
+            explanation=recommendation_text.strip(),
+            analysis=analysis_payload
+        )
+
+        return response
         
     except HTTPException:
         raise

@@ -1,0 +1,26 @@
+# Cloud Build configuration for Frontend
+steps:
+  # Build the Docker image with build arguments
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_API_BASE_URL=${_API_BASE_URL}'
+      - '-t'
+      - '${_IMAGE_NAME}'
+      - '.'
+    dir: 'frontend'
+
+  # Push the image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_IMAGE_NAME}'
+
+# Images to be pushed to Container Registry
+images:
+  - '${_IMAGE_NAME}'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'

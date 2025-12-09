@@ -3,3 +3,6 @@
 chroma_db/
 venv/
 data/
+.DS_Store
+.agent/
+.idea/

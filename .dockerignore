@@ -1,0 +1,41 @@
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Git
+.git/
+.gitignore
+.agent/
+
+# ChromaDB data (will be created fresh or mounted)
+chroma_db/
+
+# Environment files (sensitive)
+.env
+
+# Frontend (not needed in backend container)
+frontend/
+
+# Test files
+test_*.py
+*_test.py
+
+# Documentation
+README.md
+*.md
+
+# Scripts (not needed in production)
+script/

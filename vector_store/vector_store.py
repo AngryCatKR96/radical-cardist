@@ -16,28 +16,17 @@ load_dotenv()
 
 
 class CardVectorStore:
-    """벡터 스토어 검색 클래스"""
-    
-    def __init__(self, chroma_db_path: str = "chroma_db", collection_name: str = "credit_cards"):
-        """
-        Args:
-            chroma_db_path: ChromaDB 저장 경로
-            collection_name: 컬렉션 이름
-        """
-        self.chroma_db_path = chroma_db_path
-        self.collection_name = collection_name
+    """벡터 스토어 검색 클래스 (MongoDB 전용)"""
+
+    def __init__(self):
+        """CardVectorStore 초기화 (MongoDB 전용)"""
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        
-        # ChromaDB 클라이언트 초기화
-        self.chroma_client = chromadb.PersistentClient(
-            path=chroma_db_path,
-            settings=Settings(anonymized_telemetry=False)
-        )
-        
-        try:
-            self.collection = self.chroma_client.get_collection(name=collection_name)
-        except:
-            raise ValueError(f"컬렉션 '{collection_name}'을 찾을 수 없습니다. 먼저 embeddings.py로 데이터를 추가하세요.")
+
+        # MongoDB 연결 (필수)
+        from database.mongodb_client import MongoDBClient
+        self.mongo_client = MongoDBClient()
+        self.cards_collection = self.mongo_client.get_collection("cards")
+        print("✅ CardVectorStore: MongoDB 연결됨")
     
     def _generate_query_embedding(self, query_text: str) -> List[float]:
         """
@@ -105,7 +94,45 @@ class CardVectorStore:
             return conditions[0]
         else:
             return {"$and": conditions}
-    
+
+    def _build_mongodb_filter(self, filters: Optional[Dict]) -> Dict:
+        """
+        메타데이터 필터를 MongoDB 형식으로 변환
+
+        Args:
+            filters: 필터 딕셔너리
+
+        Returns:
+            MongoDB filter 객체
+        """
+        mongo_filter = {"is_discon": False}  # 항상 단종 카드 제외
+
+        if not filters:
+            return mongo_filter
+
+        # 카드 유형 필터
+        if filters.get("type"):
+            card_type = filters["type"]
+            if card_type == "credit":
+                mongo_filter["meta.type"] = "C"
+            elif card_type == "debit":
+                mongo_filter["meta.type"] = "D"
+            # "both"인 경우 필터 없음
+
+        # 전월실적 필터
+        if "pre_month_min_max" in filters:
+            mongo_filter["conditions.prev_month_min"] = {
+                "$lte": filters["pre_month_min_max"]
+            }
+
+        # 온라인 전용 필터
+        if filters.get("only_online"):
+            mongo_filter["only_online"] = True
+
+        # 연회비 필터는 post-processing에서 처리 (메타데이터에 있음)
+
+        return mongo_filter
+
     def search_chunks(
         self,
         query_text: str,
@@ -113,47 +140,80 @@ class CardVectorStore:
         top_k: int = 50
     ) -> List[Dict]:
         """
-        Chunk 단위 검색
-        
+        Chunk 단위 검색 (MongoDB Vector Search)
+
         Args:
             query_text: 검색 질의
             filters: 메타데이터 필터
             top_k: 반환할 최대 문서 수
-        
+
         Returns:
             검색 결과 리스트 [{id, text, metadata, distance}, ...]
         """
         if filters is None:
             filters = {}
-        
+
         # 질의 임베딩 생성
         query_embedding = self._generate_query_embedding(query_text)
-        
-        # 메타데이터 필터 적용
-        where_clause = self._apply_metadata_filters(filters)
-        
-        # 검색
-        try:
-            results = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=top_k,
-                where=where_clause
-            )
-        except Exception as e:
-            raise ValueError(f"검색 실패: {e}")
-        
+
+        # MongoDB Vector Search
+        mongo_filter = self._build_mongodb_filter(filters)
+
+        pipeline = [
+            {
+                "$vectorSearch": {
+                    "index": "card_vector_search",
+                    "path": "embeddings.embedding",
+                    "queryVector": query_embedding,
+                    "numCandidates": top_k * 4,  # Over-fetch for better recall
+                    "limit": top_k,
+                    "filter": mongo_filter
+                }
+            },
+            {"$unwind": "$embeddings"},
+            {
+                "$addFields": {
+                    "score": {"$meta": "vectorSearchScore"}
+                }
+            },
+            {"$sort": {"score": -1}},
+            {"$limit": top_k},
+            {
+                "$project": {
+                    "card_id": 1,
+                    "meta": 1,
+                    "conditions": 1,
+                    "doc_id": "$embeddings.doc_id",
+                    "text": "$embeddings.text",
+                    "doc_type": "$embeddings.doc_type",
+                    "embed_metadata": "$embeddings.metadata",
+                    "score": 1
+                }
+            }
+        ]
+
+        results = list(self.cards_collection.aggregate(pipeline))
+
         # 결과 포맷팅
         chunks = []
-        if results["ids"] and len(results["ids"][0]) > 0:
-            for i in range(len(results["ids"][0])):
-                chunk = {
-                    "id": results["ids"][0][i],
-                    "text": results["documents"][0][i],
-                    "metadata": results["metadatas"][0][i],
-                    "distance": results["distances"][0][i] if "distances" in results else None
-                }
-                chunks.append(chunk)
-        
+        for result in results:
+            chunk = {
+                "id": result["doc_id"],
+                "text": result["text"],
+                "metadata": {
+                    "card_id": result["card_id"],
+                    "name": result["meta"]["name"],
+                    "issuer": result["meta"]["issuer"],
+                    "brand": "",  # brands는 hints에 있으므로 생략
+                    "type": result["meta"]["type"],
+                    "prev_month_min": result["conditions"]["prev_month_min"],
+                    "doc_type": result["doc_type"],
+                    **result["embed_metadata"]
+                },
+                "distance": 1.0 - result["score"]  # Convert similarity to distance
+            }
+            chunks.append(chunk)
+
         return chunks
     
     def search_cards(

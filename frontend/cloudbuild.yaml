@@ -11,13 +11,13 @@ steps:
       - '.'
     dir: 'frontend'
 
-  # Push the image to Container Registry
+  # Push the image to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
       - '${_IMAGE_NAME}'
 
-# Images to be pushed to Container Registry
+# Images to be pushed to Artifact Registry
 images:
   - '${_IMAGE_NAME}'
 

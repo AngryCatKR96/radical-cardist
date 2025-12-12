@@ -61,16 +61,17 @@ class RateLimiter:
 
 class CardGorillaClient:
     """카드고릴라 API 클라이언트"""
-    
-    def __init__(self, cache_dir: str = "data/cache/ctx"):
-        """
-        Args:
-            cache_dir: 압축 컨텍스트 저장 디렉터리
-        """
-        self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def __init__(self):
+        """CardGorillaClient 초기화 (MongoDB 전용)"""
         self.rate_limiter = RateLimiter(max_requests=5, time_window=1)
         self.timeout = httpx.Timeout(30.0, connect=10.0)
+
+        # MongoDB 연결 (필수)
+        from database.mongodb_client import MongoDBClient
+        self.mongo_client = MongoDBClient()
+        self.cards_collection = self.mongo_client.get_collection("cards")
+        print("✅ CardGorillaClient: MongoDB 연결됨")
     
     async def fetch_card_detail(
         self,
@@ -88,7 +89,6 @@ class CardGorillaClient:
         Returns:
             카드 데이터 (Dict) 또는 None (404 등)
         """
-        cache_file = self.cache_dir / f"{card_id}.json"
         reason: Optional[str] = None
 
         def _response(value: Optional[Dict], override_reason: Optional[str] = None):
@@ -96,15 +96,12 @@ class CardGorillaClient:
             if return_reason:
                 return value, final_reason
             return value
-        
-        # 캐시 확인
-        if use_cache and cache_file.exists():
-            try:
-                with open(cache_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    return _response(data)
-            except Exception as e:
-                print(f"⚠️  캐시 로드 실패 (card_id={card_id}): {e}")
+
+        # MongoDB 캐시 확인
+        if use_cache:
+            mongo_data = await self._load_from_mongodb(card_id)
+            if mongo_data:
+                return _response(mongo_data)
         
         # Rate limiting
         await self.rate_limiter.acquire()
@@ -141,10 +138,10 @@ class CardGorillaClient:
                     # 압축 컨텍스트로 변환 및 저장
                     compressed = self._compress_context(data)
                     if compressed:
-                        with open(cache_file, 'w', encoding='utf-8') as f:
-                            json.dump(compressed, f, ensure_ascii=False, indent=2)
+                        # MongoDB에 저장
+                        await self._save_to_mongodb(card_id, compressed)
                         print(f"✅ 카드 저장 완료 (card_id={card_id})")
-                    
+
                     reason = None
                     return _response(compressed)
                     
@@ -291,23 +288,79 @@ class CardGorillaClient:
                 })
         
         return compressed
-    
+
+    async def _save_to_mongodb(self, card_id: int, card_data: Dict) -> bool:
+        """
+        MongoDB에 카드 컨텍스트 저장
+
+        Args:
+            card_id: 카드 ID
+            card_data: 압축 컨텍스트 데이터
+
+        Returns:
+            저장 성공 여부
+        """
+        try:
+            from datetime import datetime as dt
+            self.cards_collection.update_one(
+                {"card_id": card_id},
+                {
+                    "$set": {
+                        **card_data,
+                        "updated_at": dt.utcnow()
+                    },
+                    "$setOnInsert": {
+                        "created_at": dt.utcnow(),
+                        "embeddings": [],
+                        "is_discon": False
+                    }
+                },
+                upsert=True
+            )
+            return True
+        except Exception as e:
+            print(f"⚠️  MongoDB 저장 실패 (card_id={card_id}): {e}")
+            return False
+
+    async def _load_from_mongodb(self, card_id: int) -> Optional[Dict]:
+        """
+        MongoDB에서 카드 컨텍스트 로드
+
+        Args:
+            card_id: 카드 ID
+
+        Returns:
+            카드 데이터 또는 None
+        """
+        try:
+            doc = self.cards_collection.find_one(
+                {"card_id": card_id},
+                {"_id": 0, "embeddings": 0, "created_at": 0, "updated_at": 0, "is_discon": 0}
+            )
+            return doc
+        except Exception as e:
+            print(f"⚠️  MongoDB 로드 실패 (card_id={card_id}): {e}")
+            return None
+
     async def clear_cache(self, card_id: Optional[int] = None):
         """
-        캐시 삭제
-        
+        MongoDB에서 카드 데이터 삭제
+
         Args:
             card_id: 특정 카드 ID (None이면 전체 삭제)
         """
-        if card_id:
-            cache_file = self.cache_dir / f"{card_id}.json"
-            if cache_file.exists():
-                cache_file.unlink()
-                print(f"🗑️  캐시 삭제 (card_id={card_id})")
-        else:
-            for cache_file in self.cache_dir.glob("*.json"):
-                cache_file.unlink()
-            print(f"🗑️  전체 캐시 삭제 완료")
+        try:
+            if card_id:
+                result = self.cards_collection.delete_one({"card_id": card_id})
+                if result.deleted_count > 0:
+                    print(f"🗑️  카드 삭제 (card_id={card_id})")
+                else:
+                    print(f"⚠️  카드를 찾을 수 없음 (card_id={card_id})")
+            else:
+                result = self.cards_collection.delete_many({})
+                print(f"🗑️  전체 카드 삭제 완료 ({result.deleted_count}개)")
+        except Exception as e:
+            print(f"❌ 카드 삭제 실패: {e}")
 
 
 # 사용 예시

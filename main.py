@@ -143,7 +143,26 @@ async def lifespan(app: FastAPI):
         print("⚠️  Warning: OPENAI_API_KEY가 설정되지 않았습니다.")
         print("   .env 파일에 실제 API 키를 설정하거나 환경 변수를 설정해주세요.")
         print("   LLM 기능은 제한적으로 작동할 수 있습니다.")
-    
+
+    # MongoDB 연결 확인 (필수)
+    try:
+        from database.mongodb_client import MongoDBClient
+        mongo_client = MongoDBClient()
+        if mongo_client.health_check():
+            print("✅ MongoDB Atlas 연결 성공")
+            stats = mongo_client.get_stats()
+            if stats.get("total_documents"):
+                print(f"   📊 카드 문서: {stats['total_documents']}개")
+            if stats.get("documents_with_embeddings"):
+                print(f"   📊 임베딩: {stats['documents_with_embeddings']}개")
+        else:
+            print("❌ MongoDB 연결 실패 - 서비스를 시작할 수 없습니다")
+            raise ConnectionError("MongoDB 연결 실패")
+    except Exception as e:
+        print(f"❌ MongoDB 초기화 실패: {e}")
+        print("   .env 파일의 MONGODB_URI를 확인하세요")
+        raise
+
     # RAG + Agentic 서비스 초기화
     try:
         global input_parser, benefit_analyzer, recommender, response_generator, vector_store, embedding_generator, card_client
@@ -511,43 +530,73 @@ async def recommend_structured(user_intent: dict):
 @app.get("/admin/cards/stats")
 async def get_vector_db_stats():
     """
-    벡터 DB 통계 확인
-    
+    MongoDB 벡터 DB 통계 확인
+
     Returns:
-        ChromaDB 컬렉션의 통계 정보
+        MongoDB 컬렉션의 통계 정보
     """
     try:
-        if not embedding_generator:
-            raise HTTPException(
-                status_code=503,
-                detail="임베딩 서비스를 사용할 수 없습니다."
-            )
-        
-        collection = embedding_generator.collection
-        count = collection.count()
-        
-        # 카드 ID 추출
-        results = collection.get(limit=count)
-        card_ids = set()
-        for metadata in results["metadatas"]:
-            card_id = metadata.get("card_id")
-            if card_id:
-                card_ids.add(card_id)
-        
+        from database.mongodb_client import MongoDBClient
+
+        mongo_client = MongoDBClient()
+        stats = mongo_client.get_stats()
+
         return {
-            "total_documents": count,
-            "total_cards": len(card_ids),
-            "collection_name": embedding_generator.collection_name,
-            "chroma_db_path": str(embedding_generator.chroma_db_path)
+            "database": stats.get("database"),
+            "collection": stats.get("collection"),
+            "total_documents": stats.get("total_documents", 0),
+            "documents_with_embeddings": stats.get("documents_with_embeddings", 0),
+            "indexes": stats.get("indexes", []),
+            "search_indexes": stats.get("search_indexes", []),
+            "vector_search_ready": stats.get("vector_search_ready", False)
         }
-        
-    except HTTPException:
-        raise
+
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"통계 조회 중 오류가 발생했습니다: {str(e)}"
         )
+
+
+@app.get("/admin/mongodb/health")
+async def mongodb_health_check():
+    """
+    MongoDB Atlas 연결 상태 및 인덱스 확인
+
+    Returns:
+        MongoDB 연결 상태, 인덱스 목록, 문서 수 등
+    """
+    try:
+        from database.mongodb_client import MongoDBClient
+
+        mongo_client = MongoDBClient()
+        is_connected = mongo_client.health_check()
+
+        if not is_connected:
+            return {
+                "status": "disconnected",
+                "message": "MongoDB 연결 실패"
+            }
+
+        # 통계 정보 조회
+        stats = mongo_client.get_stats()
+
+        return {
+            "status": "connected",
+            "database": stats.get("database"),
+            "collection": stats.get("collection"),
+            "total_documents": stats.get("total_documents", 0),
+            "documents_with_embeddings": stats.get("documents_with_embeddings", 0),
+            "indexes": stats.get("indexes", []),
+            "search_indexes": stats.get("search_indexes", []),
+            "vector_search_ready": stats.get("vector_search_ready", False)
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 
 async def _fetch_cards_from_cardgorilla(card_ids: List[int], overwrite: bool):

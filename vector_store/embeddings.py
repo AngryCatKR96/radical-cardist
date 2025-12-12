@@ -289,34 +289,17 @@ def create_documents(card_data: Dict) -> List[Dict]:
 
 
 class EmbeddingGenerator:
-    """임베딩 생성 및 ChromaDB 저장 클래스"""
-    
-    def __init__(self, chroma_db_path: str = "chroma_db", collection_name: str = "credit_cards"):
-        """
-        Args:
-            chroma_db_path: ChromaDB 저장 경로
-            collection_name: 컬렉션 이름
-        """
-        self.chroma_db_path = Path(chroma_db_path)
-        self.collection_name = collection_name
+    """임베딩 생성 및 저장 클래스 (MongoDB 전용)"""
+
+    def __init__(self):
+        """EmbeddingGenerator 초기화 (MongoDB 전용)"""
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        
-        # ChromaDB 클라이언트 초기화
-        self.chroma_client = chromadb.PersistentClient(
-            path=str(self.chroma_db_path),
-            settings=Settings(anonymized_telemetry=False)
-        )
-        
-        # 컬렉션 가져오기 또는 생성
-        try:
-            self.collection = self.chroma_client.get_collection(name=collection_name)
-            print(f"✅ 기존 컬렉션 로드: {collection_name}")
-        except:
-            self.collection = self.chroma_client.create_collection(
-                name=collection_name,
-                metadata={"hnsw:space": "cosine"}
-            )
-            print(f"✅ 새 컬렉션 생성: {collection_name}")
+
+        # MongoDB 연결 (필수)
+        from database.mongodb_client import MongoDBClient
+        self.mongo_client = MongoDBClient()
+        self.cards_collection = self.mongo_client.get_collection("cards")
+        print("✅ EmbeddingGenerator: MongoDB 연결됨")
     
     def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
@@ -343,8 +326,8 @@ class EmbeddingGenerator:
     
     def add_card(self, card_data: Dict, overwrite: bool = False):
         """
-        카드를 문서로 분해하고 ChromaDB에 추가
-        
+        카드를 문서로 분해하고 MongoDB에 임베딩 추가
+
         Args:
             card_data: 압축 컨텍스트 Dict
             overwrite: 기존 문서 덮어쓰기 여부
@@ -353,54 +336,77 @@ class EmbeddingGenerator:
         if not card_id:
             print("⚠️  카드 ID가 없습니다")
             return
-        
-        # 기존 문서 확인
+
+        # 기존 임베딩 확인
         if not overwrite:
-            existing = self.collection.get(
-                where={"card_id": card_id},
-                limit=1
+            existing = self.cards_collection.find_one(
+                {"card_id": card_id, "embeddings.0": {"$exists": True}},
+                {"_id": 1}
             )
-            if existing["ids"]:
-                print(f"⏭️  이미 존재하는 카드 (card_id={card_id}), 건너뜀")
+            if existing:
+                print(f"⏭️  이미 임베딩 존재 (card_id={card_id}), 건너뜀")
                 return
-        
+
         # 문서 생성
         documents = create_documents(card_data)
         if not documents:
             print(f"⚠️  문서 생성 실패 (card_id={card_id})")
             return
-        
+
         # 텍스트와 메타데이터 분리
         texts = [doc["text"] for doc in documents]
         metadatas = [doc["metadata"] for doc in documents]
-        
+
         # 임베딩 생성
         embeddings = self.generate_embeddings(texts)
         if not embeddings:
             print(f"❌ 임베딩 생성 실패 (card_id={card_id})")
             return
-        
-        # ID 생성 (card_id + doc_type + index)
-        ids = []
-        for i, doc in enumerate(documents):
-            doc_type = doc["metadata"].get("doc_type", "unknown")
-            ids.append(f"{card_id}_{doc_type}_{i}")
-        
-        # ChromaDB에 추가
+
+        # MongoDB에 저장
         try:
-            # 기존 문서 삭제 (덮어쓰기)
-            if overwrite:
-                self.collection.delete(where={"card_id": card_id})
-            
-            self.collection.add(
-                ids=ids,
-                embeddings=embeddings,
-                documents=texts,
-                metadatas=metadatas
+            from datetime import datetime as dt
+
+            # ID 생성 및 임베딩 배열 구성
+            embeddings_array = []
+            for i, (doc, embedding) in enumerate(zip(documents, embeddings)):
+                doc_type = doc["metadata"].get("doc_type", "unknown")
+                embeddings_array.append({
+                    "doc_id": f"{card_id}_{doc_type}_{i}",
+                    "doc_type": doc_type,
+                    "text": doc["text"],
+                    "embedding": embedding,
+                    "metadata": {
+                        "category_std": doc["metadata"].get("category_std", ""),
+                        "benefit_type": doc["metadata"].get("benefit_type", ""),
+                        "payment_methods": doc["metadata"].get("payment_methods", ""),
+                        "exclusions_present": doc["metadata"].get("exclusions_present", False),
+                        "annual_fee_total": doc["metadata"].get("annual_fee_total")
+                    }
+                })
+
+            # MongoDB 업데이트 (카드 전체 context + embeddings)
+            self.cards_collection.update_one(
+                {"card_id": card_id},
+                {
+                    "$set": {
+                        "card_id": card_id,
+                        "meta": card_data.get("meta", {}),
+                        "conditions": card_data.get("conditions", {}),
+                        "fees": card_data.get("fees", {}),
+                        "hints": card_data.get("hints", {}),
+                        "benefits_html": card_data.get("benefits_html", []),
+                        "is_discon": False,
+                        "embeddings": embeddings_array,
+                        "updated_at": dt.utcnow()
+                    }
+                },
+                upsert=True  # 문서가 없으면 생성
             )
-            print(f"✅ 카드 추가 완료 (card_id={card_id}, 문서 {len(documents)}개)")
+            print(f"✅ 카드 데이터 및 임베딩 추가 완료 (card_id={card_id}, 문서 {len(documents)}개)")
         except Exception as e:
-            print(f"❌ ChromaDB 추가 실패 (card_id={card_id}): {e}")
+            print(f"❌ MongoDB 임베딩 저장 실패 (card_id={card_id}): {e}")
+            raise
     
     def add_cards_batch(self, card_data_list: List[Dict], overwrite: bool = False):
         """

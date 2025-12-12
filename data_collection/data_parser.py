@@ -101,25 +101,50 @@ def parse_card_data(raw_data: Dict) -> Optional[Dict]:
 
 def load_compressed_context(card_id: int, cache_dir: str = "data/cache/ctx") -> Optional[Dict]:
     """
-    저장된 압축 컨텍스트 로드
-    
+    MongoDB에서 압축 컨텍스트 로드 (MongoDB 전용)
+
     Args:
         card_id: 카드 ID
-        cache_dir: 캐시 디렉터리
-    
+        cache_dir: (사용 안 함, 하위 호환성을 위해 유지)
+
     Returns:
         압축 컨텍스트 Dict 또는 None
     """
-    cache_file = Path(cache_dir) / f"{card_id}.json"
-    
-    if not cache_file.exists():
-        return None
-    
     try:
-        with open(cache_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        from database.mongodb_client import MongoDBClient
+
+        mongo_client = MongoDBClient()
+        collection = mongo_client.get_collection("cards")
+
+        # MongoDB에서 카드 조회 (embeddings 제외)
+        card_doc = collection.find_one(
+            {"card_id": card_id},
+            {
+                "_id": 0,
+                "meta": 1,
+                "conditions": 1,
+                "fees": 1,
+                "hints": 1,
+                "benefits_html": 1
+            }
+        )
+
+        if card_doc:
+            # 필요한 필드만 추출
+            compressed_context = {
+                "meta": card_doc.get("meta", {}),
+                "conditions": card_doc.get("conditions", {}),
+                "fees": card_doc.get("fees", {}),
+                "hints": card_doc.get("hints", {}),
+                "benefits_html": card_doc.get("benefits_html", [])
+            }
+            return compressed_context
+        else:
+            print(f"⚠️  MongoDB에서 카드를 찾을 수 없음 (card_id={card_id})")
+            return None
+
     except Exception as e:
-        print(f"⚠️  컨텍스트 로드 실패 (card_id={card_id}): {e}")
+        print(f"⚠️  MongoDB 로드 실패 (card_id={card_id}): {e}")
         return None
 
 

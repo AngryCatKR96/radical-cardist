@@ -385,17 +385,25 @@ class EmbeddingGenerator:
                     }
                 })
 
-            # MongoDB 업데이트
+            # MongoDB 업데이트 (카드 전체 context + embeddings)
             self.cards_collection.update_one(
                 {"card_id": card_id},
                 {
                     "$set": {
+                        "card_id": card_id,
+                        "meta": card_data.get("meta", {}),
+                        "conditions": card_data.get("conditions", {}),
+                        "fees": card_data.get("fees", {}),
+                        "hints": card_data.get("hints", {}),
+                        "benefits_html": card_data.get("benefits_html", []),
+                        "is_discon": False,
                         "embeddings": embeddings_array,
                         "updated_at": dt.utcnow()
                     }
-                }
+                },
+                upsert=True  # 문서가 없으면 생성
             )
-            print(f"✅ 카드 임베딩 추가 완료 (card_id={card_id}, 문서 {len(documents)}개)")
+            print(f"✅ 카드 데이터 및 임베딩 추가 완료 (card_id={card_id}, 문서 {len(documents)}개)")
         except Exception as e:
             print(f"❌ MongoDB 임베딩 저장 실패 (card_id={card_id}): {e}")
             raise

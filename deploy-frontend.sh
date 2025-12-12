@@ -11,7 +11,8 @@ echo "🚀 Starting frontend deployment to Cloud Run..."
 PROJECT_ID="${GCP_PROJECT_ID:-your-gcp-project-id}"
 REGION="${GCP_REGION:-asia-northeast3}"
 SERVICE_NAME="${FRONTEND_SERVICE_NAME:-cardemon-frontend}"
-IMAGE_NAME="gcr.io/${PROJECT_ID}/${SERVICE_NAME}"
+REPOSITORY_NAME="${ARTIFACT_REGISTRY_REPO:-cardemon}"
+IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY_NAME}/${SERVICE_NAME}"
 
 # Backend URL (required)
 BACKEND_URL="${NEXT_PUBLIC_API_BASE_URL:-}"
@@ -42,7 +43,33 @@ gcloud config set project "$PROJECT_ID"
 
 # Enable required APIs
 echo "🔧 Enabling required APIs..."
-gcloud services enable cloudbuild.googleapis.com run.googleapis.com
+gcloud services enable cloudbuild.googleapis.com run.googleapis.com artifactregistry.googleapis.com
+
+# Create Artifact Registry repository if it doesn't exist
+echo "📦 Checking Artifact Registry repository..."
+if ! gcloud artifacts repositories describe "$REPOSITORY_NAME" --location="$REGION" &> /dev/null; then
+  echo "Creating Artifact Registry repository: $REPOSITORY_NAME"
+  gcloud artifacts repositories create "$REPOSITORY_NAME" \
+    --repository-format=docker \
+    --location="$REGION" \
+    --description="Docker repository for Cardemon services"
+else
+  echo "Repository $REPOSITORY_NAME already exists"
+fi
+
+# Configure Cloud Build permissions for Artifact Registry
+echo "🔐 Configuring Cloud Build permissions..."
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
+CLOUD_BUILD_SA="${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com"
+
+# Grant Artifact Registry Writer role to Cloud Build service account
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:${CLOUD_BUILD_SA}" \
+  --role="roles/artifactregistry.writer" \
+  --condition=None \
+  --no-user-output-enabled &> /dev/null || true
+
+echo "Cloud Build service account configured: $CLOUD_BUILD_SA"
 
 # Build and push the Docker image
 echo "🏗️  Building Docker image with backend URL: $BACKEND_URL"

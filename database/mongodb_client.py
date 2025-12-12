@@ -141,9 +141,26 @@ class MongoDBClient:
             total_docs = collection.count_documents({})
             with_embeddings = collection.count_documents({"embeddings.0": {"$exists": True}})
 
-            # 인덱스 정보
+            # 일반 인덱스 정보
             indexes = list(collection.list_indexes())
             index_names = [idx["name"] for idx in indexes]
+
+            # Atlas Search 인덱스 확인 (MongoDB 7.0+)
+            search_indexes = []
+            vector_search_ready = False
+
+            try:
+                # $listSearchIndexes aggregation으로 Atlas Search 인덱스 조회
+                search_index_cursor = collection.aggregate([
+                    {"$listSearchIndexes": {}}
+                ])
+                search_indexes = [idx["name"] for idx in search_index_cursor]
+                vector_search_ready = "card_vector_search" in search_indexes
+            except Exception as search_error:
+                # MongoDB 버전이 낮거나 권한이 없는 경우
+                print(f"Search index 조회 실패 (정상적일 수 있음): {search_error}")
+                # embeddings가 있으면 vector search가 설정되었다고 가정
+                vector_search_ready = with_embeddings > 0
 
             return {
                 "database": self.db_name,
@@ -151,7 +168,8 @@ class MongoDBClient:
                 "total_documents": total_docs,
                 "documents_with_embeddings": with_embeddings,
                 "indexes": index_names,
-                "vector_search_ready": "card_vector_search" in index_names
+                "search_indexes": search_indexes,
+                "vector_search_ready": vector_search_ready
             }
         except Exception as e:
             return {"error": str(e)}

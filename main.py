@@ -547,6 +547,7 @@ async def get_vector_db_stats():
             "total_documents": stats.get("total_documents", 0),
             "documents_with_embeddings": stats.get("documents_with_embeddings", 0),
             "indexes": stats.get("indexes", []),
+            "search_indexes": stats.get("search_indexes", []),
             "vector_search_ready": stats.get("vector_search_ready", False)
         }
 
@@ -587,6 +588,7 @@ async def mongodb_health_check():
             "total_documents": stats.get("total_documents", 0),
             "documents_with_embeddings": stats.get("documents_with_embeddings", 0),
             "indexes": stats.get("indexes", []),
+            "search_indexes": stats.get("search_indexes", []),
             "vector_search_ready": stats.get("vector_search_ready", False)
         }
 

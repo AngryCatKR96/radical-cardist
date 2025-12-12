@@ -174,6 +174,50 @@ class MongoDBClient:
         except Exception as e:
             return {"error": str(e)}
 
+    def get_rate_limits_collection(self) -> Collection:
+        """
+        Rate limiting 컬렉션 접근
+
+        Returns:
+            rate_limits Collection 객체
+        """
+        return self.db["rate_limits"]
+
+    def get_user_requests_collection(self) -> Collection:
+        """
+        사용자 요청 로깅 컬렉션 접근
+
+        Returns:
+            user_requests Collection 객체
+        """
+        return self.db["user_requests"]
+
+    def initialize_security_indexes(self):
+        """
+        보안 컬렉션 인덱스 초기화
+
+        - rate_limits: IP 기반 조회, TTL 인덱스
+        - user_requests: 타임스탬프 기반 조회, TTL 인덱스
+        """
+        try:
+            # rate_limits 인덱스
+            rate_limits = self.get_rate_limits_collection()
+            rate_limits.create_index("ip_address", unique=True)
+            rate_limits.create_index("reset_at", expireAfterSeconds=172800)  # 48시간
+            rate_limits.create_index([("ip_address", 1), ("reset_at", 1)])
+
+            # user_requests 인덱스
+            user_requests = self.get_user_requests_collection()
+            user_requests.create_index([("timestamp", -1)])
+            user_requests.create_index([("ip_address", 1), ("timestamp", -1)])
+            user_requests.create_index([("status", 1), ("timestamp", -1)])
+            user_requests.create_index("timestamp", expireAfterSeconds=7776000)  # 90일
+
+            print("✅ Security indexes 생성 완료")
+        except Exception as e:
+            print(f"⚠️  Security indexes 생성 실패: {e}")
+            raise
+
     def close(self):
         """MongoDB 연결 종료"""
         if hasattr(self, "client") and self.client:

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query, Body
+from fastapi import FastAPI, HTTPException, Query, Body, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -7,6 +7,13 @@ import os
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional
+
+# Security modules
+from security.admin_auth import require_admin_auth
+from security.prompt_validator import validate_user_input, PromptAttackException
+from security.request_logger import RequestLogger, RequestTimer
+from security.ip_utils import get_client_ip
+from security.rate_limiter import rate_limit_dependency
 
 # 새로운 RAG + Agentic 모듈
 from agents.input_parser import InputParser
@@ -177,7 +184,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️  RAG + Agentic 서비스 초기화 실패: {str(e)}")
         print("   /recommend/natural-language 엔드포인트는 사용할 수 없습니다.")
-    
+
+    # Security 인덱스 초기화
+    try:
+        mongo_client.initialize_security_indexes()
+    except Exception as e:
+        print(f"⚠️  Security indexes 초기화 실패: {e}")
+        print("   보안 기능(rate limiting, 로깅)이 제한적으로 작동할 수 있습니다.")
+
     yield  # 서비스 실행
     
     # Shutdown: 애플리케이션 종료 시
@@ -235,16 +249,20 @@ async def health_check():
 @app.post(
     "/recommend/natural-language",
     response_model=RecommendResponse,
-    summary="자연어 소비 패턴으로 카드 추천"
+    summary="자연어 소비 패턴으로 카드 추천",
+    dependencies=[Depends(rate_limit_dependency)]
 )
-async def recommend_natural_language(payload: NaturalLanguageRequest):
+async def recommend_natural_language(
+    request: Request,
+    payload: NaturalLanguageRequest
+):
     """
     자연어 입력 기반 카드 추천
-    
+
     사용자가 자연어로 소비 패턴을 입력하면, 최적의 카드 1장을 추천합니다.
-    
+
     - **user_input**: 자연어 소비 패턴 (예: "마트 30만원, 넷플릭스 구독, 간편결제 자주 씀. 연회비 2만원 이하")
-    
+
     파이프라인:
     1. 자연어 입력 파싱 (Input Parser)
     2. 벡터 검색으로 후보 Top-M 선정
@@ -253,9 +271,49 @@ async def recommend_natural_language(payload: NaturalLanguageRequest):
     5. 응답 생성 (Response Generator)
     """
     import time
-    
+    import traceback
+
+    # 로깅 및 타이머 초기화
+    timer = RequestTimer()
+    timer.start()
+    request_logger = RequestLogger()
+    ip_address = get_client_ip(request)
+
+    # 프롬프트 공격 여부 추적
+    prompt_attack_detected = False
+    attack_patterns = []
+
     try:
         user_input = payload.user_input.strip()
+
+        # 프롬프트 공격 검증
+        try:
+            validate_user_input(user_input)
+        except PromptAttackException as attack_error:
+            # 프롬프트 공격 탐지됨
+            prompt_attack_detected = True
+            attack_patterns = attack_error.matched_patterns
+
+            # 로깅
+            await request_logger.log_request(
+                ip_address=ip_address,
+                endpoint="/recommend/natural-language",
+                user_input=user_input,
+                processing_time_ms=timer.get_total_time(),
+                status="validation_error",
+                prompt_attack_detected=True,
+                attack_patterns=attack_patterns,
+                error={
+                    "message": str(attack_error.detail),
+                    "type": "prompt_attack",
+                    "status_code": 400
+                },
+                performance=timer.get_performance_dict()
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=attack_error.detail
+            )
 
         if not all([input_parser, benefit_analyzer, recommender, response_generator, vector_store]):
             raise HTTPException(
@@ -263,40 +321,32 @@ async def recommend_natural_language(payload: NaturalLanguageRequest):
                 detail="RAG + Agentic 서비스를 사용할 수 없습니다. 서비스 초기화를 확인해주세요."
             )
         
-        # 전체 처리 시작 시간
-        total_start_time = time.perf_counter()
+        # 전체 처리 시작
         print(f"\n[PERF] ========== 전체 처리 시작 ==========")
-        
+
         # 1. 입력 파싱
-        step1_start = time.perf_counter()
         print(f"\n[INFO] Step 1: Input Parsing")
-        print(f"[PERF] Step 1 시작")
         print(f"Input: {user_input}")
         user_intent = input_parser.parse(user_input)
-        step1_end = time.perf_counter()
-        step1_time = step1_end - step1_start
+        timer.mark_step("step1_input_parsing_ms")
         print(f"Parsed Intent: {user_intent}")
-        print(f"[PERF] Step 1 완료: {step1_time:.3f}초")
+        print(f"[PERF] Step 1 완료")
         
         # 2. 벡터 검색 (Top-M 후보 선정)
-        step2_start = time.perf_counter()
         query_text = user_intent.get("query_text", user_input)
         filters = user_intent.get("filters", {})
         print(f"\n[INFO] Step 2: Vector Search")
-        print(f"[PERF] Step 2 시작")
         print(f"Query: {query_text}")
         print(f"Filters: {filters}")
-        
+
         candidates = vector_store.search_cards(query_text, filters, top_m=5)
-        step2_end = time.perf_counter()
-        step2_time = step2_end - step2_start
+        timer.mark_step("step2_vector_search_ms")
         print(f"Candidates Found: {len(candidates)}")
         for i, c in enumerate(candidates):
             print(f"  [{i+1}] ID: {c.get('card_id')} (Score: {c.get('score')})")
-        print(f"[PERF] Step 2 완료: {step2_time:.3f}초")
+        print(f"[PERF] Step 2 완료")
         
         if not candidates:
-            total_time = time.perf_counter() - total_start_time
             print("[INFO] No candidates found. Returning error.")
             raise HTTPException(
                 status_code=404,
@@ -304,15 +354,13 @@ async def recommend_natural_language(payload: NaturalLanguageRequest):
             )
         
         # 3. 혜택 분석
-        step3_start = time.perf_counter()
         print(f"\n[INFO] Step 3: Benefit Analysis")
-        print(f"[PERF] Step 3 시작")
         user_pattern = {
             "spending": user_intent.get("spending", {}),
             "preferences": user_intent.get("preferences", {})
         }
         print(f"User Pattern: {user_pattern}")
-        
+
         card_contexts = [
             {
                 "card_id": c["card_id"],
@@ -320,45 +368,36 @@ async def recommend_natural_language(payload: NaturalLanguageRequest):
             }
             for c in candidates
         ]
-        
+
         analysis_results = benefit_analyzer.analyze_batch(user_pattern, card_contexts)
-        step3_end = time.perf_counter()
-        step3_time = step3_end - step3_start
+        timer.mark_step("step3_benefit_analysis_ms")
         print(f"Analysis Results: {len(analysis_results)} cards analyzed")
-        print(f"[PERF] Step 3 완료: {step3_time:.3f}초")
+        print(f"[PERF] Step 3 완료")
         
         # 4. 최종 선택
-        step4_start = time.perf_counter()
         print(f"\n[INFO] Step 4: Final Selection")
-        print(f"[PERF] Step 4 시작")
         recommendation_result = recommender.select_best_card(
             analysis_results,
             user_preferences=user_intent.get("preferences")
         )
-        step4_end = time.perf_counter()
-        step4_time = step4_end - step4_start
+        timer.mark_step("step4_recommendation_ms")
         print(f"Selected Card ID: {recommendation_result.get('selected_card')}")
         print(f"Net Benefit: {recommendation_result.get('score_breakdown', {}).get('net_benefit')}")
-        print(f"[PERF] Step 4 완료: {step4_time:.3f}초")
+        print(f"[PERF] Step 4 완료")
         
         # 5. 응답 생성
-        step5_start = time.perf_counter()
         print(f"\n[INFO] Step 5: Response Generation")
-        print(f"[PERF] Step 5 시작")
         recommendation_text = response_generator.generate(
             recommendation_result,
             user_pattern=user_pattern
         )
-        step5_end = time.perf_counter()
-        step5_time = step5_end - step5_start
+        timer.mark_step("step5_response_generation_ms")
         print("Response generated successfully.")
-        print(f"[PERF] Step 5 완료: {step5_time:.3f}초")
-        
+        print(f"[PERF] Step 5 완료")
+
         # 전체 처리 완료
-        total_end_time = time.perf_counter()
-        total_time = total_end_time - total_start_time
-        print(f"\n[PERF] ========== 전체 처리 완료: {total_time:.3f}초 ==========")
-        print(f"[PERF] 단계별 시간: Step1={step1_time:.3f}s, Step2={step2_time:.3f}s, Step3={step3_time:.3f}s, Step4={step4_time:.3f}s, Step5={step5_time:.3f}s")
+        print(f"\n[PERF] ========== 전체 처리 완료: {timer.get_total_time():.2f}ms ==========")
+        print(f"[PERF] 단계별 시간: {timer.get_performance_dict()}")
         
         selected_card_id = recommendation_result["selected_card"]
         card_context = load_compressed_context(selected_card_id)
@@ -427,11 +466,73 @@ async def recommend_natural_language(payload: NaturalLanguageRequest):
             analysis=analysis_payload
         )
 
+        # 성공 로깅
+        await request_logger.log_request(
+            ip_address=ip_address,
+            endpoint="/recommend/natural-language",
+            user_input=user_input,
+            processing_time_ms=timer.get_total_time(),
+            status="success",
+            recommendation={
+                "card_id": str(selected_card_id),
+                "card_name": recommendation_result.get("name", meta.get("name", "")),
+                "annual_savings": annual_savings,
+                "monthly_savings": monthly_savings,
+                "net_benefit": net_benefit,
+                "annual_fee": annual_fee_amount,
+                "explanation": recommendation_text.strip(),
+                "category_breakdown": category_breakdown,
+                "warnings": recommendation_result.get("warnings", [])
+            },
+            performance=timer.get_performance_dict(),
+            alternative_cards=[str(c["card_id"]) for c in candidates[:5]]
+        )
+
         return response
-        
-    except HTTPException:
+
+    except HTTPException as e:
+        # 프롬프트 공격은 이미 로깅됨
+        if prompt_attack_detected:
+            raise
+
+        # HTTPException 로깅 (rate limit, not found 등)
+        error_status = "rate_limited" if e.status_code == 429 else \
+                      "validation_error" if e.status_code == 400 else \
+                      "not_found" if e.status_code == 404 else \
+                      "service_unavailable" if e.status_code == 503 else "error"
+
+        await request_logger.log_request(
+            ip_address=ip_address,
+            endpoint="/recommend/natural-language",
+            user_input=payload.user_input.strip(),
+            processing_time_ms=timer.get_total_time(),
+            status=error_status,
+            error={
+                "message": str(e.detail),
+                "type": error_status,
+                "status_code": e.status_code
+            },
+            performance=timer.get_performance_dict(),
+            prompt_attack_detected=False
+        )
         raise
+
     except Exception as e:
+        # 일반 예외 로깅
+        await request_logger.log_request(
+            ip_address=ip_address,
+            endpoint="/recommend/natural-language",
+            user_input=payload.user_input.strip(),
+            processing_time_ms=timer.get_total_time(),
+            status="error",
+            error={
+                "message": str(e),
+                "type": "internal",
+                "detail": traceback.format_exc()
+            },
+            performance=timer.get_performance_dict()
+        )
+
         raise HTTPException(
             status_code=500,
             detail=f"추천 생성 중 오류가 발생했습니다: {str(e)}"
@@ -527,7 +628,7 @@ async def recommend_structured(user_intent: dict):
 
 # ========== 관리자 API 엔드포인트 ==========
 
-@app.get("/admin/cards/stats")
+@app.get("/admin/cards/stats", dependencies=[Depends(require_admin_auth)])
 async def get_vector_db_stats():
     """
     MongoDB 벡터 DB 통계 확인
@@ -558,7 +659,7 @@ async def get_vector_db_stats():
         )
 
 
-@app.get("/admin/mongodb/health")
+@app.get("/admin/mongodb/health", dependencies=[Depends(require_admin_auth)])
 async def mongodb_health_check():
     """
     MongoDB Atlas 연결 상태 및 인덱스 확인
@@ -788,7 +889,7 @@ async def _sync_cards_background(card_ids: List[int], overwrite: bool):
     return results
 
 
-@app.post("/admin/cards/fetch")
+@app.post("/admin/cards/fetch", dependencies=[Depends(require_admin_auth)])
 async def fetch_cards_from_cardgorilla(
     overwrite: bool = Query(False),
     start_id: int = Query(1),
@@ -849,7 +950,7 @@ async def fetch_cards_from_cardgorilla(
         )
 
 
-@app.post("/admin/cards/embed")
+@app.post("/admin/cards/embed", dependencies=[Depends(require_admin_auth)])
 async def embed_cards_to_chromadb(
     overwrite: bool = Query(False),
     start_id: int = Query(None),
@@ -928,7 +1029,7 @@ async def embed_cards_to_chromadb(
         )
 
 
-@app.post("/admin/cards/sync")
+@app.post("/admin/cards/sync", dependencies=[Depends(require_admin_auth)])
 async def sync_cards_batch(
     overwrite: bool = Query(False),
     start_id: int = Query(1),
@@ -1003,7 +1104,7 @@ async def sync_cards_batch(
         )
 
 
-@app.post("/admin/cards/{card_id}")
+@app.post("/admin/cards/{card_id}", dependencies=[Depends(require_admin_auth)])
 async def sync_single_card(card_id: int, overwrite: bool = False):
     """
     특정 카드 데이터 동기화
@@ -1054,7 +1155,7 @@ async def sync_single_card(card_id: int, overwrite: bool = False):
         )
 
 
-@app.delete("/admin/cards/reset")
+@app.delete("/admin/cards/reset", dependencies=[Depends(require_admin_auth)])
 async def reset_vector_db():
     """
     벡터 DB 초기화 (모든 데이터 삭제)

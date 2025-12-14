@@ -343,7 +343,7 @@ async def recommend_natural_language(
         timer.mark_step("step2_vector_search_ms")
         print(f"Candidates Found: {len(candidates)}")
         for i, c in enumerate(candidates):
-            print(f"  [{i+1}] ID: {c.get('card_id')} (Score: {c.get('score')})")
+            print(f"  [{i+1}] ID: {c.get('card_id')} (Score: {c.get('aggregate_score', 0.0):.4f})")
         print(f"[PERF] Step 2 완료")
         
         if not candidates:

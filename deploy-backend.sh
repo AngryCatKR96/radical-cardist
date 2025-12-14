@@ -50,6 +50,14 @@ if [ -z "$OPENAI_API_KEY" ]; then
   MISSING_VARS+=("OPENAI_API_KEY")
 fi
 
+if [ -z "$ADMIN_API_KEY" ]; then
+  MISSING_VARS+=("ADMIN_API_KEY")
+fi
+
+if [ -z "$IP_HASH_SALT" ]; then
+  MISSING_VARS+=("IP_HASH_SALT")
+fi
+
 if [ ${#MISSING_VARS[@]} -gt 0 ]; then
   echo "❌ Missing required environment variables:"
   for var in "${MISSING_VARS[@]}"; do
@@ -59,6 +67,8 @@ if [ ${#MISSING_VARS[@]} -gt 0 ]; then
   echo "💡 Please set these variables in your .env file or export them:"
   echo "   export MONGODB_URI='your-mongodb-connection-string'"
   echo "   export OPENAI_API_KEY='your-openai-api-key'"
+  echo "   export ADMIN_API_KEY='your-admin-api-key'  # Generate: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+  echo "   export IP_HASH_SALT='your-ip-hash-salt'    # Generate: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
   exit 1
 fi
 
@@ -109,7 +119,7 @@ gcloud run deploy "$SERVICE_NAME" \
   --cpu 1 \
   --timeout 300 \
   --max-instances 10 \
-  --set-env-vars "OPENAI_API_KEY=${OPENAI_API_KEY:-},MONGODB_URI=${MONGODB_URI:-},MONGODB_DATABASE=${MONGODB_DATABASE:-cardemon},MONGODB_COLLECTION_CARDS=${MONGODB_COLLECTION_CARDS:-cards}"
+  --set-env-vars "OPENAI_API_KEY=${OPENAI_API_KEY:-},MONGODB_URI=${MONGODB_URI:-},MONGODB_DATABASE=${MONGODB_DATABASE:-cardemon},MONGODB_COLLECTION_CARDS=${MONGODB_COLLECTION_CARDS:-cards},ADMIN_API_KEY=${ADMIN_API_KEY:-},IP_HASH_SALT=${IP_HASH_SALT:-},RATE_LIMIT_DAILY=${RATE_LIMIT_DAILY:-3},RATE_LIMIT_TIMEZONE=${RATE_LIMIT_TIMEZONE:-Asia/Seoul}"
 
 # Get the service URL
 SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \

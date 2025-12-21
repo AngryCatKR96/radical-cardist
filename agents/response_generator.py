@@ -19,7 +19,7 @@ class ResponseGenerator:
     
     def __init__(self):
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.model = "gpt-4-turbo-preview"
+        self.model = "gpt-5-mini"
     
     def generate(
         self,
@@ -113,7 +113,7 @@ class ResponseGenerator:
                         "content": prompt
                     }
                 ],
-                temperature=0.7
+                temperature=1.0  # gpt-5-mini는 temperature=1만 지원
             )
             
             return response.choices[0].message.content

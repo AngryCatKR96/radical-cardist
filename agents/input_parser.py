@@ -19,7 +19,7 @@ class InputParser:
     
     def __init__(self):
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.model = "gpt-4-turbo-preview"
+        self.model = "gpt-5-mini"
     
     def _get_function_schema(self) -> Dict:
         """Function Calling 스키마 반환"""
@@ -189,7 +189,7 @@ class InputParser:
                     "function": function_schema
                 }],
                 tool_choice={"type": "function", "function": {"name": "extract_spending_pattern"}},
-                temperature=0.1
+                temperature=1.0  # gpt-5-mini는 temperature=1만 지원
             )
             
             # Function call 결과 추출

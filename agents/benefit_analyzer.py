@@ -19,7 +19,7 @@ class BenefitAnalyzer:
     
     def __init__(self):
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.model = "gpt-4-turbo-preview"
+        self.model = "o4-mini"
     
     def _get_function_schema(self) -> Dict:
         """Function Calling 스키마 반환"""
@@ -126,8 +126,14 @@ class BenefitAnalyzer:
 중요:
 - 할인율이 있으면 실제 사용 금액에 적용하여 절약액을 계산하세요.
 - 월 한도가 있으면 그 한도 내에서만 계산하세요.
-- 전월실적 조건을 확인하고, 미충족 시 conditions_met를 false로 설정하세요.
 - 여러 카테고리 혜택이 있으면 각각 계산하고 category_breakdown에 기록하세요.
+
+**전월실적 조건 처리 규칙**:
+- 사용자의 전월실적 정보가 명시적으로 제공되지 않은 경우, 사용자가 제시한 월 소비 패턴이 전월에도 유사하게 발생했다고 가정하세요.
+- 예: 사용자가 "간편결제 200,000원/월" 사용한다면, 전월에도 유사한 소비가 있었다고 간주합니다.
+- 사용자의 월 소비 총액이 전월실적 조건을 충족하면 conditions_met를 true로 설정하세요.
+- 명백히 전월실적을 충족할 수 없는 경우(예: 월 소비 30만원인데 전월실적 100만원 요구)에만 conditions_met를 false로 설정하세요.
+- 전월실적 조건이 있으면 항상 warnings에 조건을 명시하세요.
 """
         
         try:
@@ -148,7 +154,7 @@ class BenefitAnalyzer:
                     "function": function_schema
                 }],
                 tool_choice={"type": "function", "function": {"name": "analyze_benefit"}},
-                temperature=0.1
+                temperature=1.0  # o4-mini는 temperature=1만 지원
             )
             
             # Function call 결과 추출

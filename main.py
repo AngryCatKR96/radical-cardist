@@ -133,7 +133,14 @@ def _build_benefit_highlights(category_breakdown: Dict[str, int], fallback_title
         highlights.append(f"{label}에서 월 {_format_currency(amount)}원 혜택 예상")
 
     if not highlights:
-        highlights = fallback_titles[:3]
+        # 중복 제거: 순서를 유지하면서 중복을 제거
+        seen = set()
+        unique_titles = []
+        for title in fallback_titles:
+            if title not in seen:
+                seen.add(title)
+                unique_titles.append(title)
+        highlights = unique_titles[:3]
 
     return highlights or ["혜택 정보를 불러오지 못했습니다. 카드 상세 페이지를 확인해주세요."]
 

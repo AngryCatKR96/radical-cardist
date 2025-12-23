@@ -103,8 +103,19 @@ class BenefitAnalyzer:
             elif isinstance(data, (int, float)):
                 if data > 0:
                     spending_summary.append(f"{category}: {data:,}원/월")
-        
-        user_summary = "\n".join(spending_summary)
+
+        # must_include_categories 추가
+        constraints = user_pattern.get("constraints", {})
+        must_include = constraints.get("must_include_categories", [])
+
+        user_summary_parts = []
+        if spending_summary:
+            user_summary_parts.append("**구체적인 지출 금액:**\n" + "\n".join(spending_summary))
+
+        if must_include:
+            user_summary_parts.append("**사용자가 관심있는 카테고리:**\n" + ", ".join(must_include))
+
+        user_summary = "\n\n".join(user_summary_parts) if user_summary_parts else "구체적인 소비 금액 정보 없음"
         
         # LLM 호출
         function_schema = self._get_function_schema()
@@ -118,21 +129,22 @@ class BenefitAnalyzer:
 {evidence_context}
 
 위 정보를 바탕으로:
-1. 사용자가 이 카드를 사용할 때 실제로 얼마나 절약할 수 있는지 계산하세요.
-2. 전월실적 조건, 최소 구매금액, 월 한도 등 모든 조건을 고려하세요.
-3. 제외 항목이 있으면 warnings에 기록하세요.
-4. 계산 근거를 reasoning에 상세히 기록하세요.
+1. **사용자가 관심있는 카테고리**에 이 카드의 혜택이 있는지 확인하세요.
+2. 구체적인 금액이 없어도, 사용자가 관심있는 카테고리에 혜택이 있으면 긍정적으로 평가하세요.
+3. 예: 사용자가 'online_shopping'에 관심있고, 카드에 쿠팡/네이버쇼핑 할인이 있으면 좋은 매칭입니다.
+4. 전월실적 조건, 최소 구매금액, 월 한도 등 모든 조건을 고려하세요.
+5. 제외 항목이 있으면 warnings에 기록하세요.
+6. 계산 근거를 reasoning에 상세히 기록하세요.
 
 중요:
+- **구체적인 금액이 없어도** 카테고리 매칭이 좋으면 이 카드가 적합하다고 판단하세요.
 - 할인율이 있으면 실제 사용 금액에 적용하여 절약액을 계산하세요.
 - 월 한도가 있으면 그 한도 내에서만 계산하세요.
 - 여러 카테고리 혜택이 있으면 각각 계산하고 category_breakdown에 기록하세요.
 
 **전월실적 조건 처리 규칙**:
-- 사용자의 전월실적 정보가 명시적으로 제공되지 않은 경우, 사용자가 제시한 월 소비 패턴이 전월에도 유사하게 발생했다고 가정하세요.
-- 예: 사용자가 "간편결제 200,000원/월" 사용한다면, 전월에도 유사한 소비가 있었다고 간주합니다.
-- 사용자의 월 소비 총액이 전월실적 조건을 충족하면 conditions_met를 true로 설정하세요.
-- 명백히 전월실적을 충족할 수 없는 경우(예: 월 소비 30만원인데 전월실적 100만원 요구)에만 conditions_met를 false로 설정하세요.
+- 사용자의 전월실적 정보가 명시적으로 제공되지 않은 경우, 일반적인 소비자 기준으로 전월실적 충족 가능성을 판단하세요.
+- 사용자가 관심있는 카테고리를 정기적으로 사용한다면 조건을 충족할 가능성이 높다고 가정하세요.
 - 전월실적 조건이 있으면 항상 warnings에 조건을 명시하세요.
 """
         
@@ -142,7 +154,7 @@ class BenefitAnalyzer:
                 messages=[
                     {
                         "role": "system",
-                        "content": "당신은 신용카드 혜택 분석 전문가입니다. 사용자의 실제 소비 패턴과 카드 혜택을 정확히 매칭하여 정량적 절약액을 계산합니다."
+                        "content": "당신은 신용카드 혜택 분석 전문가입니다. 사용자의 소비 패턴 및 관심 카테고리와 카드 혜택을 매칭하여 적합성을 평가하고 절약액을 계산합니다. 구체적인 금액이 없어도 카테고리 매칭이 좋으면 긍정적으로 평가하세요."
                     },
                     {
                         "role": "user",

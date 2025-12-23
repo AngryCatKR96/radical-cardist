@@ -120,7 +120,7 @@ class CardVectorStore:
             # "both"인 경우 필터 없음
 
         # 전월실적 필터
-        if "pre_month_min_max" in filters:
+        if "pre_month_min_max" in filters and filters["pre_month_min_max"] is not None:
             mongo_filter["conditions.prev_month_min"] = {
                 "$lte": filters["pre_month_min_max"]
             }
@@ -361,13 +361,13 @@ class CardVectorStore:
             metadata = candidate["evidence_chunks"][0]["metadata"]
             
             # 전월실적 필터
-            if "pre_month_min_max" in filters:
+            if "pre_month_min_max" in filters and filters["pre_month_min_max"] is not None:
                 prev_month_min = metadata.get("prev_month_min", 0)
                 if prev_month_min > filters["pre_month_min_max"]:
                     continue
-            
+
             # 연회비 필터
-            if "annual_fee_max" in filters:
+            if "annual_fee_max" in filters and filters["annual_fee_max"] is not None:
                 annual_fee = metadata.get("annual_fee_total")
                 if annual_fee and annual_fee > filters["annual_fee_max"]:
                     continue

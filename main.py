@@ -363,7 +363,8 @@ async def recommend_natural_language(
         print(f"\n[INFO] Step 3: Benefit Analysis")
         user_pattern = {
             "spending": user_intent.get("spending", {}),
-            "preferences": user_intent.get("preferences", {})
+            "preferences": user_intent.get("preferences", {}),
+            "constraints": user_intent.get("constraints", {})
         }
         print(f"User Pattern: {user_pattern}")
 

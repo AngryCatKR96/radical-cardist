@@ -31,13 +31,14 @@ class InputParser:
                 "properties": {
                     "spending": {
                         "type": "object",
-                        "description": "카테고리별 월 예상 지출 금액 (원 단위)",
+                        "description": "카테고리별 월 예상 지출 금액 (원 단위). **중요**: 사용자가 언급한 모든 소비 카테고리를 반드시 포함해야 함. 금액이 명시되지 않은 경우 amount를 0으로 설정. 예: '스타벅스 자주 가' -> cafe: {amount: 0, merchants: ['스타벅스']}, '쿠팡에서 장' -> online_shopping: {amount: 0, merchants: ['쿠팡']}",
+                        "minProperties": 1,
                         "additionalProperties": {
                             "type": "object",
                             "properties": {
                                 "amount": {
                                     "type": "number",
-                                    "description": "월 지출 금액 (원)"
+                                    "description": "월 지출 금액 (원). 명시되지 않으면 0"
                                 },
                                 "merchants": {
                                     "type": "array",
@@ -177,7 +178,19 @@ class InputParser:
                 messages=[
                     {
                         "role": "system",
-                        "content": "당신은 사용자의 자연어 소비 패턴 입력을 구조화된 데이터로 변환하는 전문가입니다. 사용자가 언급한 모든 정보를 정확하게 추출하세요. 특히 '연회비 2만원 이하'와 같은 조건이 있을 때, '넘어도 된다', '선호한다' 등의 유연한 표현이 함께 있다면 이를 강제 필터(filters)가 아닌 선호사항(preferences)으로 분류해야 합니다. '절대', '무조건', '이상은 안됨' 등의 강한 표현이 있을 때만 filters에 값을 설정하세요."
+                        "content": """당신은 사용자의 자연어 소비 패턴 입력을 구조화된 데이터로 변환하는 전문가입니다.
+
+**중요 규칙**:
+1. **spending 객체는 절대 비어있으면 안 됩니다**. 사용자가 언급한 모든 소비 카테고리를 반드시 포함하세요.
+2. 금액이 명시되지 않았어도 카테고리만 언급되면 spending에 추가하고 amount=0으로 설정하세요.
+3. 카테고리 매핑 예시:
+   - "스타벅스 자주 가" → cafe: {amount: 0, merchants: ["스타벅스"]}
+   - "쿠팡에서 장보거나 네이버 쇼핑" → online_shopping: {amount: 0, merchants: ["쿠팡", "네이버쇼핑"]}, grocery: {amount: 0, merchants: ["쿠팡"]}
+   - "해외여행" → travel: {amount: 0}
+   - "배달 자주 시켜먹어" → delivery: {amount: 0}
+4. 사용 가능한 카테고리: online_shopping, grocery, cafe, coffee, travel, delivery, digital_payment, convenience_store, dining, fuel, transportation, subscription_video, subscription_music 등
+5. spending이 비어있다면 must_include_categories를 참고하여 채워 넣으세요.
+6. '연회비 낮을수록 좋음'은 preferences에, '연회비 절대 2만원 이하'는 filters에 넣으세요."""
                     },
                     {
                         "role": "user",

@@ -60,19 +60,42 @@ const isRecommendResponse = (payload: unknown): payload is RecommendResponse => 
   );
 };
 
+type RateLimitError = {
+  error: string;
+  message: string;
+  reset_at?: string;
+  limit?: number;
+};
+
+type RateLimitStatus = {
+  limit: number;
+  remaining: number;
+  resetAt?: number;
+};
+
 export default function HomePage() {
   const [userInput, setUserInput] = useState("");
   const [status, setStatus] = useState<RequestStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [rateLimitInfo, setRateLimitInfo] = useState<RateLimitError | null>(null);
+  const [rateLimitStatus, setRateLimitStatus] = useState<RateLimitStatus | null>(null);
   const [result, setResult] = useState<RecommendResponse | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const storageTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const trimmedLength = userInput.trim().length;
-  const isTooShort =
-    trimmedLength > 0 && trimmedLength < MIN_INPUT_LENGTH && status !== "loading";
-  const isSubmitDisabled =
-    trimmedLength < MIN_INPUT_LENGTH || status === "loading";
+  // 메모이제이션된 파생 상태들
+  const trimmedLength = useMemo(() => userInput.trim().length, [userInput]);
+  
+  const isTooShort = useMemo(
+    () => trimmedLength > 0 && trimmedLength < MIN_INPUT_LENGTH && status !== "loading",
+    [trimmedLength, status]
+  );
+  
+  const isSubmitDisabled = useMemo(
+    () => trimmedLength < MIN_INPUT_LENGTH || status === "loading",
+    [trimmedLength, status]
+  );
 
   const breakdownEntries = useMemo(() => {
     if (!result?.analysis?.category_breakdown) return [];
@@ -81,9 +104,14 @@ export default function HomePage() {
       .sort((a, b) => b[1] - a[1]);
   }, [result]);
 
-  const focusTextarea = () => {
+  const explanationMarkdown = useMemo(
+    () => result?.explanation ?? "",
+    [result?.explanation]
+  );
+
+  const focusTextarea = useCallback(() => {
     requestAnimationFrame(() => textareaRef.current?.focus());
-  };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -94,6 +122,8 @@ export default function HomePage() {
           userInput: unknown;
           status: unknown;
           error: unknown;
+          rateLimitInfo: unknown;
+          rateLimitStatus: unknown;
           result: unknown;
         }>;
 
@@ -110,6 +140,20 @@ export default function HomePage() {
 
         setError(typeof parsed.error === "string" ? parsed.error : null);
 
+        if (parsed.rateLimitInfo && typeof parsed.rateLimitInfo === "object" && parsed.rateLimitInfo !== null) {
+          const rateLimit = parsed.rateLimitInfo as RateLimitError;
+          if (rateLimit.error === "Rate limit exceeded") {
+            setRateLimitInfo(rateLimit);
+          }
+        }
+
+        if (parsed.rateLimitStatus && typeof parsed.rateLimitStatus === "object" && parsed.rateLimitStatus !== null) {
+          const rateStatus = parsed.rateLimitStatus as RateLimitStatus;
+          if (typeof rateStatus.limit === "number" && typeof rateStatus.remaining === "number") {
+            setRateLimitStatus(rateStatus);
+          }
+        }
+
         if (parsed.result && isRecommendResponse(parsed.result)) {
           setResult(parsed.result);
         }
@@ -120,22 +164,41 @@ export default function HomePage() {
     setIsHydrated(true);
   }, []);
 
+  // localStorage 저장을 디바운싱하여 최적화
   useEffect(() => {
     if (!isHydrated || typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          userInput,
-          status,
-          error,
-          result,
-        })
-      );
-    } catch (persistError) {
-      console.warn("로컬 스토리지 저장 실패:", persistError);
+    
+    // 이전 타이머가 있으면 취소
+    if (storageTimeoutRef.current) {
+      clearTimeout(storageTimeoutRef.current);
     }
-  }, [isHydrated, userInput, status, error, result]);
+    
+    // 500ms 후에 저장 (디바운싱)
+    storageTimeoutRef.current = setTimeout(() => {
+      try {
+        window.localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            userInput,
+            status,
+            error,
+            rateLimitInfo,
+            rateLimitStatus,
+            result,
+          })
+        );
+      } catch (persistError) {
+        console.warn("로컬 스토리지 저장 실패:", persistError);
+      }
+    }, 500);
+    
+    // cleanup 함수
+    return () => {
+      if (storageTimeoutRef.current) {
+        clearTimeout(storageTimeoutRef.current);
+      }
+    };
+  }, [isHydrated, userInput, status, error, rateLimitInfo, rateLimitStatus, result]);
 
   const requestRecommendation = useCallback(async () => {
     const trimmed = userInput.trim();
@@ -148,6 +211,7 @@ export default function HomePage() {
 
     setStatus("loading");
     setError(null);
+    setRateLimitInfo(null);
     setResult(null);
 
     try {
@@ -169,18 +233,44 @@ export default function HomePage() {
       }
 
       if (!response.ok) {
-        const detail =
-          (payload as { detail?: string } | null)?.detail ??
-          "조건이 너무 까다로운 것 같아요. 연회비/전월 실적 조건을 조금 완화해서 다시 시도해보세요.";
-        throw new Error(detail);
+        const detail = (payload as { detail?: string | RateLimitError } | null)?.detail;
+        
+        // Rate limit 에러인 경우
+        if (detail && typeof detail === "object" && "error" in detail && detail.error === "Rate limit exceeded") {
+          const rateLimitError = detail as RateLimitError;
+          setRateLimitInfo(rateLimitError);
+          throw new Error(rateLimitError.message || "일일 추천 횟수를 초과했습니다.");
+        }
+        
+        // 일반 에러인 경우
+        const errorMessage = typeof detail === "string" 
+          ? detail 
+          : (typeof detail === "object" && detail && "message" in detail && typeof detail.message === "string")
+            ? detail.message
+            : "조건이 너무 까다로운 것 같아요. 연회비/전월 실적 조건을 조금 완화해서 다시 시도해보세요.";
+        throw new Error(errorMessage);
       }
 
       if (!isRecommendResponse(payload)) {
         throw new Error("응답 형식이 올바르지 않습니다. 잠시 후 다시 시도해주세요.");
       }
 
+      // Rate limit 헤더 읽기
+      const limitHeader = response.headers.get("X-RateLimit-Limit");
+      const remainingHeader = response.headers.get("X-RateLimit-Remaining");
+      const resetHeader = response.headers.get("X-RateLimit-Reset");
+      
+      if (limitHeader && remainingHeader) {
+        setRateLimitStatus({
+          limit: parseInt(limitHeader, 10),
+          remaining: parseInt(remainingHeader, 10),
+          resetAt: resetHeader ? parseInt(resetHeader, 10) : undefined
+        });
+      }
+
       setResult(payload);
       setStatus("success");
+      setRateLimitInfo(null);
     } catch (fetchError) {
       console.error(fetchError);
       const message =
@@ -190,41 +280,42 @@ export default function HomePage() {
       setError(message);
       setStatus("error");
     }
-  }, [userInput]);
+  }, [userInput, focusTextarea]);
 
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = useCallback((event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     requestRecommendation();
-  };
+  }, [requestRecommendation]);
 
-  const handleRetry = () => {
+  const handleRetry = useCallback(() => {
     requestRecommendation();
-  };
+  }, [requestRecommendation]);
 
-  const handleAdjust = () => {
+  const handleAdjust = useCallback(() => {
     setStatus("idle");
     setError(null);
+    setRateLimitInfo(null);
     setResult(null);
     focusTextarea();
-  };
+  }, [focusTextarea]);
 
-  const handleReset = () => {
+  const handleReset = useCallback(() => {
     setUserInput("");
     setStatus("idle");
     setError(null);
+    setRateLimitInfo(null);
     setResult(null);
     focusTextarea();
-  };
+  }, [focusTextarea]);
 
-  const handlePromptClick = (prompt: string) => {
+  const handlePromptClick = useCallback((prompt: string) => {
     setUserInput(prompt);
     setStatus("idle");
     setResult(null);
     setError(null);
+    setRateLimitInfo(null);
     focusTextarea();
-  };
-
-  const explanationMarkdown = result?.explanation ?? "";
+  }, [focusTextarea]);
 
   return (
     <main className={styles.page}>
@@ -232,9 +323,22 @@ export default function HomePage() {
         <p className={styles.eyebrow}>AI Credit Card Advisor</p>
         <h1 className={styles.title}>나에게 맞는 신용카드 추천</h1>
         <p className={styles.subtitle}>
-          소비 패턴을 자연어로 적어주시면, AI가 카드 한 장을 골라드립니다.
+          소비 패턴을 자연어로 적어주시면, AI가 카드 한 장을 골라드립니다. <br></br>
           연회비나 전월 실적 조건 걱정 없이 바로 비교해보세요.
         </p>
+        {rateLimitStatus && (
+          <div style={{
+            marginTop: "1rem",
+            padding: "0.5rem 1rem",
+            backgroundColor: "rgba(0, 0, 0, 0.05)",
+            borderRadius: "0.5rem",
+            fontSize: "0.875rem",
+            color: "var(--text-secondary, #666)",
+            display: "inline-block"
+          }}>
+            일일 요청 한도: {rateLimitStatus.remaining} / {rateLimitStatus.limit}회
+          </div>
+        )}
       </section>
 
       <section className={styles.workspace}>
@@ -282,7 +386,7 @@ export default function HomePage() {
               >
                 {isTooShort
                   ? `조금 더 구체적으로 적어주세요. (최소 ${MIN_INPUT_LENGTH}자)`
-                  : "예산, 선호 혜택, 연회비 조건을 함께 적어주세요."}
+                  : "예산, 선호하는 혜택, 연회비 조건 등을 함께 적어주세요."}
               </p>
               <button
                 type="submit"
@@ -306,29 +410,58 @@ export default function HomePage() {
             <div className={styles.loadingBox}>
               <div className={styles.spinner} aria-hidden />
               <div>
-                <p>소비 패턴을 분석하고 있어요…</p>
-                <small>약 5~10초 정도 소요될 수 있습니다.</small>
+                <p>소비 패턴을 분석하고 있어요</p>
+                <small>약 1분 정도 소요될 수 있습니다.</small>
               </div>
             </div>
           )}
 
           {status === "error" && (
             <div className={styles.errorBox}>
-              <p className={styles.errorTitle}>
-                조건이 너무 까다로운 것 같아요.
-              </p>
-              <p>
-                {error ??
-                  "연회비나 전월 실적 조건을 조금 완화해서 다시 시도해볼까요?"}
-              </p>
-              <button
-                type="button"
-                className={styles.retryButton}
-                onClick={handleRetry}
-                disabled={trimmedLength < MIN_INPUT_LENGTH}
-              >
-                다시 시도
-              </button>
+              {rateLimitInfo ? (
+                <>
+                  <p className={styles.errorTitle}>
+                    일일 추천 횟수를 초과했습니다
+                  </p>
+                  <p>
+                    {rateLimitInfo.message || "일일 추천 횟수를 초과했습니다. 내일 다시 시도해주세요."}
+                  </p>
+                  {rateLimitInfo.reset_at && (
+                    <p style={{ fontSize: "0.9em", color: "var(--text-secondary)", marginTop: "0.5rem" }}>
+                      제한 해제 시간: {new Date(rateLimitInfo.reset_at).toLocaleString("ko-KR", {
+                        year: "numeric",
+                        month: "long",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit"
+                      })}
+                    </p>
+                  )}
+                  {rateLimitInfo.limit && (
+                    <p style={{ fontSize: "0.9em", color: "var(--text-secondary)", marginTop: "0.25rem" }}>
+                      일일 제한: {rateLimitInfo.limit}회
+                    </p>
+                  )}
+                </>
+              ) : (
+                <>
+                  <p className={styles.errorTitle}>
+                    조건이 너무 까다로운 것 같아요.
+                  </p>
+                  <p>
+                    {error ??
+                      "연회비나 전월 실적 조건을 조금 완화해서 다시 시도해볼까요?"}
+                  </p>
+                  <button
+                    type="button"
+                    className={styles.retryButton}
+                    onClick={handleRetry}
+                    disabled={trimmedLength < MIN_INPUT_LENGTH}
+                  >
+                    다시 시도
+                  </button>
+                </>
+              )}
             </div>
           )}
 
@@ -440,15 +573,8 @@ export default function HomePage() {
                   className={styles.secondaryButton}
                   onClick={handleAdjust}
                 >
-                  조건 조금 바꿔서 다시 질문하기
-                </button>
-                <button
-                  type="button"
-                  className={styles.ghostButton}
-                  onClick={handleReset}
-                >
                   새로 입력하기
-                </button>
+                </button> 
         </div>
             </>
           )}

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query, Body, Depends, Request
+from fastapi import FastAPI, HTTPException, Query, Body, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -6,14 +6,13 @@ import uvicorn
 import os
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-from typing import Dict, List, Optional
-
+from typing import Dict, List, Optional 
 # Security modules
 from security.admin_auth import require_admin_auth
 from security.prompt_validator import validate_user_input, PromptAttackException
 from security.request_logger import RequestLogger, RequestTimer
 from security.ip_utils import get_client_ip
-from security.rate_limiter import rate_limit_dependency
+from security.rate_limiter import rate_limit_dependency, RateLimiter
 
 # 새로운 RAG + Agentic 모듈
 from agents.input_parser import InputParser
@@ -495,7 +494,23 @@ async def recommend_natural_language(
             alternative_cards=[str(c["card_id"]) for c in candidates[:5]]
         )
 
-        return response
+        # Rate limit 정보를 헤더에 포함 
+        rate_limiter = RateLimiter()
+        remaining = getattr(request.state, "rate_limit_remaining", rate_limiter.daily_limit)
+        reset_time = getattr(request.state, "rate_limit_reset", None)
+        
+        headers = {
+            "X-RateLimit-Limit": str(rate_limiter.daily_limit),
+            "X-RateLimit-Remaining": str(remaining),
+        }
+        if reset_time:
+            headers["X-RateLimit-Reset"] = str(int(reset_time.timestamp()))
+        
+        return Response(
+            content=response.model_dump_json(),
+            media_type="application/json",
+            headers=headers
+        )
 
     except HTTPException as e:
         # 프롬프트 공격은 이미 로깅됨

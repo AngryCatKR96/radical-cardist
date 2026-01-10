@@ -13,24 +13,16 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'),
   title: {
-    default: "나에게 맞는 신용카드 추천 | Radical Cardist",
-    template: "%s | Radical Cardist",
+    default: "나에게 맞는 신용카드 추천 | 카데몬",
+    template: "%s | 카데몬",
   },
-  description:
-    "소비 패턴을 자연어로 입력하면 AI가 최적의 신용카드를 한 장으로 정리해 추천합니다.",
-  keywords: [
-    "신용카드 추천",
-    "카드 비교",
-    "AI 카드 추천",
-    "연회비 추천",
-    "소비 패턴 분석",
-  ],
+  description: "카데몬이 여러분의 최고의 신용카드를 추천해줍니다.",
   openGraph: {
     title: "나에게 맞는 신용카드 추천",
-    description:
-      "소비 패턴을 자연어로 입력하면 AI가 최적의 카드 혜택을 찾아드립니다.",
-    siteName: "Radical Cardist",
+    description: "카데몬이 여러분의 최고의 신용카드를 추천해줍니다.",
+    siteName: "나에게 맞는 신용카드 추천 | 카데몬",
     locale: "ko_KR",
     type: "website",
   },

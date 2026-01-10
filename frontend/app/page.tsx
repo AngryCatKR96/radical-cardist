@@ -320,11 +320,11 @@ export default function HomePage() {
   return (
     <main className={styles.page}>
       <section className={styles.hero}>
-        <p className={styles.eyebrow}>AI Credit Card Advisor</p>
+        <p className={styles.eyebrow}>카데몬의 카드 추천</p>
         <h1 className={styles.title}>나에게 맞는 신용카드 추천</h1>
         <p className={styles.subtitle}>
-          소비 패턴을 자연어로 적어주시면, AI가 카드 한 장을 골라드립니다. <br></br>
-          연회비나 전월 실적 조건 걱정 없이 바로 비교해보세요.
+          소비 패턴을 적어주시면, 카데몬이 카드 한 장을 골라드립니다. <br></br>
+          당신의 소비 흐름을 분석해 가장 잘 맞는 카드를 골라드립니다.
         </p>
         {rateLimitStatus && (
           <div style={{
@@ -408,8 +408,10 @@ export default function HomePage() {
 
           {status === "loading" && (
             <div className={styles.loadingBox}>
+              <img src="/cademon_sleep.png" alt="loading" style={{ width: "200px" }} />
               <div className={styles.spinner} aria-hidden />
               <div>
+                
                 <p>소비 패턴을 분석하고 있어요</p>
                 <small>약 1분 정도 소요될 수 있습니다.</small>
               </div>

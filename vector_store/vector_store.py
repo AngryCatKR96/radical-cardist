@@ -110,9 +110,12 @@ class CardVectorStore:
         if not filters:
             return mongo_filter
 
+        # None 값을 가진 키 제거
+        filters = {k: v for k, v in filters.items() if v is not None}
+
         # 카드 유형 필터
-        if filters.get("type"):
-            card_type = filters["type"]
+        card_type = filters.get("type")
+        if card_type:
             if card_type == "credit":
                 mongo_filter["meta.type"] = "C"
             elif card_type == "debit":
@@ -120,13 +123,14 @@ class CardVectorStore:
             # "both"인 경우 필터 없음
 
         # 전월실적 필터
-        if "pre_month_min_max" in filters and filters["pre_month_min_max"] is not None:
+        pre_month_max = filters.get("pre_month_min_max")
+        if pre_month_max is not None:
             mongo_filter["conditions.prev_month_min"] = {
-                "$lte": filters["pre_month_min_max"]
+                "$lte": pre_month_max
             }
 
         # 온라인 전용 필터
-        if filters.get("only_online"):
+        if filters.get("only_online") is True:
             mongo_filter["only_online"] = True
 
         # 연회비 필터는 post-processing에서 처리 (메타데이터에 있음)
@@ -235,6 +239,13 @@ class CardVectorStore:
         Returns:
             카드 후보 리스트 [{card_id, name, evidence_chunks, aggregate_score}, ...]
         """
+        # filters 초기화 (None이면 빈 딕셔너리)
+        if filters is None:
+            filters = {}
+        else:
+            # None 값을 가진 키 제거
+            filters = {k: v for k, v in filters.items() if v is not None}
+        
         # 1. Chunk 단위 검색
         chunks = self.search_chunks(query_text, filters, top_k=50)
         
@@ -314,14 +325,14 @@ class CardVectorStore:
             
             # 전월실적 미충족
             prev_month_min = metadata.get("prev_month_min", 0)
-            pre_month_max = filters.get("pre_month_min_max", float('inf'))
-            if prev_month_min > pre_month_max:
+            pre_month_max = filters.get("pre_month_min_max") if filters else None
+            if pre_month_max is not None and prev_month_min > pre_month_max:
                 penalties += 0.5
             
             # 연회비 상한 초과
             annual_fee = metadata.get("annual_fee_total")
-            annual_fee_max = filters.get("annual_fee_max", float('inf'))
-            if annual_fee and annual_fee > annual_fee_max:
+            annual_fee_max = filters.get("annual_fee_max") if filters else None
+            if annual_fee_max is not None and annual_fee and annual_fee > annual_fee_max:
                 penalties += 0.3
             
             # 최종 점수
@@ -361,15 +372,17 @@ class CardVectorStore:
             metadata = candidate["evidence_chunks"][0]["metadata"]
             
             # 전월실적 필터
-            if "pre_month_min_max" in filters and filters["pre_month_min_max"] is not None:
-                prev_month_min = metadata.get("prev_month_min", 0)
-                if prev_month_min > filters["pre_month_min_max"]:
+            pre_month_max = filters.get("pre_month_min_max") if filters else None
+            if pre_month_max is not None:
+                prev_month_min = metadata.get("prev_month_min", 0) or 0
+                if prev_month_min > pre_month_max:
                     continue
 
             # 연회비 필터
-            if "annual_fee_max" in filters and filters["annual_fee_max"] is not None:
+            annual_fee_max = filters.get("annual_fee_max") if filters else None
+            if annual_fee_max is not None:
                 annual_fee = metadata.get("annual_fee_total")
-                if annual_fee and annual_fee > filters["annual_fee_max"]:
+                if annual_fee is not None and annual_fee > annual_fee_max:
                     continue
             
             filtered_candidates.append(candidate)

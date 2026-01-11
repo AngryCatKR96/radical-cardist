@@ -12,9 +12,9 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 const SAMPLE_PROMPTS = [
-  "사회초년생 / 월 200~300 / 간편결제 위주",
-  "해외 결제, 항공 마일리지 많이 쓰고 싶어요",
-  "마트 30만원, 배달앱 10만원, 연회비 2만원 이내"
+  "사회초년생 / 월소비 200만원에서 300만원 / 편의점과 배달앱 결제가 많음",
+  "해외 결제가 많고 항공 마일리지 많이 모으고 싶어요",
+  "마트에서 한 달에 약 30만원 정도 쓰고, 배달앱은 10만원 정도 사용합니다."
 ];
 
 const ReactMarkdown = dynamic(() => import("react-markdown"), { ssr: false });
@@ -239,7 +239,10 @@ export default function HomePage() {
         if (detail && typeof detail === "object" && "error" in detail && detail.error === "Rate limit exceeded") {
           const rateLimitError = detail as RateLimitError;
           setRateLimitInfo(rateLimitError);
-          throw new Error(rateLimitError.message || "일일 추천 횟수를 초과했습니다.");
+          const errorMessage = ("message" in rateLimitError && typeof rateLimitError.message === "string")
+            ? rateLimitError.message
+            : "일일 추천 횟수를 초과했습니다.";
+          throw new Error(errorMessage);
         }
         
         // 일반 에러인 경우
@@ -272,7 +275,7 @@ export default function HomePage() {
       setStatus("success");
       setRateLimitInfo(null);
     } catch (fetchError) {
-      console.error(fetchError);
+      console.info(fetchError);
       const message =
         fetchError instanceof Error
           ? fetchError.message
@@ -322,6 +325,7 @@ export default function HomePage() {
       <section className={styles.hero}>
         <p className={styles.eyebrow}>카데몬의 카드 추천</p>
         <h1 className={styles.title}>나에게 맞는 신용카드 추천</h1>
+        <img src="/cademon_main.png" alt="cademon_main" style={{ width: "200px" }} />
         <p className={styles.subtitle}>
           소비 패턴을 적어주시면, 카데몬이 카드 한 장을 골라드립니다. <br></br>
           당신의 소비 흐름을 분석해 가장 잘 맞는 카드를 골라드립니다.
@@ -342,11 +346,7 @@ export default function HomePage() {
       </section>
 
       <section className={styles.workspace}>
-        <article className={styles.inputCard}>
-          <header>
-            <h2>소비 패턴 입력</h2>
-            <p>최소 15자 이상 자세히 적어주실수록 정확도가 높아집니다.</p>
-          </header>
+        <article className={styles.inputCard}> 
 
           <form onSubmit={handleSubmit} className={styles.form} autoComplete="off">
             <label htmlFor="spending-textarea" className={styles.fieldLabel}>
@@ -402,7 +402,7 @@ export default function HomePage() {
         <article className={styles.resultCard} aria-live="polite">
           {status === "idle" && !result && !error && (
             <p className={styles.placeholder}>
-              아직 추천을 받지 않았어요. 조건을 입력하고 버튼을 눌러보세요.
+              아직 추천을 받지 않았어요. 
             </p>
           )}
 
@@ -495,7 +495,7 @@ export default function HomePage() {
                     icon: "📅",
                   },
                   {
-                    label: "순 혜택",
+                    label: "순 혜택(혜택금 - 연회비)",
                     value: `${formatAmount(result.analysis.net_benefit)}원`,
                     icon: "✨",
                   },
@@ -526,8 +526,7 @@ export default function HomePage() {
               )}
 
               {explanationMarkdown && (
-                <section className={styles.explanation}>
-                  <h4>이 카드를 추천한 이유</h4>
+                <section className={styles.explanation}> 
                   <div className={styles.markdown}>
                     <ReactMarkdown>{explanationMarkdown}</ReactMarkdown>
                   </div>

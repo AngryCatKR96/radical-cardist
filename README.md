@@ -174,14 +174,31 @@ curl -X POST "http://localhost:8000/admin/cards/2862"
 동기화가 완료된 후 테스트를 실행하세요:
 
 ```bash
-# 테스트 스크립트 실행
-python test_api.py
+# 기본 API 테스트
+python test/test_api.py
 ```
 
-브라우저에서 `http://localhost:8000/docs`에 접속하면 API 문서를 확인하고 대화형으로 테스트할 수 있습니다.
+브라우저에서 `http://localhost:8000/docs`에 접속하면 API 문서를 확인하고 대화형으로 테스트할 수 있습니다.   
+ 
+### 전체 추천 로직 플로우차트    
+![전체 추천 로직 플로우차트](diagram.png)
 
-## 🔎 아키텍처 상세 설명
+```         
+flowchart TD
+  A["① User Input<br/>자연어 소비 패턴<br/>예) 마트 30만원 · 넷플릭스 구독 · 간편결제 자주 사용"] --> B
 
+  B["② Input Parser (LLM)<br/>Model: gpt-5-mini<br/>Calls: 1<br/>Output: UserIntent (JSON)"] --> C
+
+  C["③ Vector Search (RAG)<br/>Embedding: text-embedding-3-small (1회)<br/>MongoDB Vector Search<br/>Top-50 chunks → 카드 단위 재집계/스코어링<br/>Output: Top-5 Candidates"] --> D
+
+  D["④ Benefit Analyzer (LLM)<br/>카드별 혜택 문서 해석/매칭<br/>월·연 절약액 계산<br/>Calls: 최대 5회 (카드당 1회)"] --> E
+
+  E["⑤ Recommender (Algorithm)<br/>메타데이터 로드<br/>혜택 점수 + 조건 충족 여부 종합<br/>Output: Best Card (1장)"] --> F
+
+  F["⑥ Response Generator (Template)<br/>템플릿 기반 응답 생성<br/>Output: Final JSON"] --> G
+
+  G["Final Response<br/>추천 카드 정보 · 추천 사유<br/>월/연 절약 금액 · 주의사항/조건 요약"] 
+```
 이 서비스는 5단계 파이프라인으로 구성되어 있습니다:
 
 ### 1단계: 입력 파서 (LLM Function Calling)

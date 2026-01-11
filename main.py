@@ -341,6 +341,11 @@ async def recommend_natural_language(
         # 2. 벡터 검색 (Top-M 후보 선정)
         query_text = user_intent.get("query_text", user_input)
         filters = user_intent.get("filters", {})
+        
+        # None 값을 가진 필터 키 제거
+        if filters:
+            filters = {k: v for k, v in filters.items() if v is not None}
+        
         print(f"\n[INFO] Step 2: Vector Search")
         print(f"Query: {query_text}")
         print(f"Filters: {filters}")
@@ -376,7 +381,7 @@ async def recommend_natural_language(
             for c in candidates
         ]
 
-        analysis_results = benefit_analyzer.analyze_batch(user_pattern, card_contexts)
+        analysis_results = await benefit_analyzer.analyze_batch(user_pattern, card_contexts)
         timer.mark_step("step3_benefit_analysis_ms")
         print(f"Analysis Results: {len(analysis_results)} cards analyzed")
         print(f"[PERF] Step 3 완료")
@@ -403,7 +408,8 @@ async def recommend_natural_language(
         print(f"[PERF] Step 5 완료")
 
         # 전체 처리 완료
-        print(f"\n[PERF] ========== 전체 처리 완료: {timer.get_total_time():.2f}ms ==========")
+        total_time_seconds = timer.get_total_time() / 1000
+        print(f"\n[PERF] ========== 전체 처리 완료: {total_time_seconds:.3f}초 ==========")
         print(f"[PERF] 단계별 시간: {timer.get_performance_dict()}")
         
         selected_card_id = recommendation_result["selected_card"]
@@ -587,6 +593,11 @@ async def recommend_structured(user_intent: dict):
         # 1. 벡터 검색 (Top-M 후보 선정)
         query_text = user_intent.get("query_text", "")
         filters = user_intent.get("filters", {})
+        
+        # None 값을 가진 필터 키 제거
+        if filters:
+            filters = {k: v for k, v in filters.items() if v is not None}
+        
         candidates = vector_store.search_cards(query_text, filters, top_m=5)
         
         if not candidates:
@@ -609,7 +620,7 @@ async def recommend_structured(user_intent: dict):
             for c in candidates
         ]
         
-        analysis_results = benefit_analyzer.analyze_batch(user_pattern, card_contexts)
+        analysis_results = await benefit_analyzer.analyze_batch(user_pattern, card_contexts)
         
         # 3. 최종 선택
         recommendation_result = recommender.select_best_card(
@@ -1230,8 +1241,6 @@ async def reset_vector_db():
             status_code=500,
             detail=f"벡터 DB 초기화 중 오류가 발생했습니다: {str(e)}"
         )
-
-
 if __name__ == "__main__":
     print("📝 사용법:")
     print("   1. .env 파일에 OPENAI_API_KEY를 설정하세요")
@@ -1241,10 +1250,12 @@ if __name__ == "__main__":
     print("   5. POST /recommend/natural-language로 테스트해보세요")
     print()
     
+    # 포트 8000이 사용 중인지 확인
+    PORT = 8000
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
+        port=PORT,
         reload=True,
         log_level="info"
     )

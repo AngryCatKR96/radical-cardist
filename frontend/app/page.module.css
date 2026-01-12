@@ -27,7 +27,7 @@
 .title {
   font-size: clamp(2rem, 4vw, 3rem);
   font-weight: 700;
-  margin-bottom: 1rem;
+  margin: 0;
 }
 
 .subtitle {
@@ -275,8 +275,8 @@
 
 .metaGrid {
   list-style: none;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 1rem;
   margin: 0;
   padding: 0;

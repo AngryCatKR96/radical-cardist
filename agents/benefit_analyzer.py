@@ -5,121 +5,106 @@
 LLM이 카드 혜택 설명을 해석하고, 사용자 지출과 매칭하여 월/연 절약액을 산출합니다.
 """
 
+from utils import measure_time
 import json
-from typing import Dict, List, Optional
-from openai import OpenAI
+import asyncio
+import sys
+from pathlib import Path
+from typing import Dict, List
+from openai import AsyncOpenAI
 import os
 from dotenv import load_dotenv
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 
 load_dotenv()
 
 
 class BenefitAnalyzer:
-    """혜택 분석 Agent"""
-    
-    def __init__(self):
-        self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.model = "o4-mini"
-    
-    def _get_function_schema(self) -> Dict:
-        """Function Calling 스키마 반환"""
+    def __init__(self, model: str = "gpt-5-mini"):
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY가 설정되어 있지 않습니다.")
+        self.client = AsyncOpenAI(api_key=api_key)
+        self.model = model
+
+    @staticmethod
+    def _function_schema() -> Dict:
         return {
             "name": "analyze_benefit",
             "description": "카드 혜택 설명과 사용자 소비 패턴을 분석하여 실제 절약 금액을 계산합니다.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "monthly_savings": {
-                        "type": "number",
-                        "description": "월 예상 절약액 (원)"
-                    },
-                    "annual_savings": {
-                        "type": "number",
-                        "description": "연 예상 절약액 (원)"
-                    },
-                    "conditions_met": {
-                        "type": "boolean",
-                        "description": "전월실적 등 조건 충족 여부"
-                    },
+                    "monthly_savings": {"type": "number", "description": "월 예상 절약액 (원)"},
+                    "annual_savings": {"type": "number", "description": "연 예상 절약액 (원)"},
+                    "conditions_met": {"type": "boolean", "description": "전월실적 등 조건 충족 여부"},
                     "warnings": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "주의사항 (전월실적 미충족, 한도 초과, 제외 항목 등)"
+                        "description": "주의사항 (전월실적 미충족, 한도 초과, 제외 항목 등)",
                     },
                     "category_breakdown": {
                         "type": "object",
                         "description": "카테고리별 월 절약액 (원)",
-                        "additionalProperties": {
-                            "type": "number"
-                        }
+                        "additionalProperties": {"type": "number"},
                     },
                     "optimization_tips": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "혜택 최대화를 위한 사용 전략"
+                        "description": "혜택 최대화를 위한 사용 전략",
                     },
-                    "reasoning": {
-                        "type": "string",
-                        "description": "계산 근거 및 가정"
-                    }
+                    "reasoning": {"type": "string", "description": "계산 근거"},
                 },
-                "required": ["monthly_savings", "annual_savings", "conditions_met", "warnings"]
-            }
+                "required": ["monthly_savings", "annual_savings", "conditions_met", "warnings"],
+            },
         }
-    
-    def analyze(
-        self,
-        user_pattern: Dict,
-        card_context: Dict
-    ) -> Dict:
-        """
-        카드 혜택 분석
-        
-        Args:
-            user_pattern: 사용자 소비 패턴 (UserIntent의 spending 등)
-            card_context: 카드 컨텍스트 {card_id, evidence_chunks}
-        
-        Returns:
-            분석 결과 Dict
-        """
-        # 증거 문서 텍스트 수집
-        evidence_texts = []
+
+    @staticmethod
+    def _build_evidence_context(card_context: Dict) -> str:
+        parts: List[str] = []
         for chunk in card_context.get("evidence_chunks", []):
-            doc_type = chunk.get("metadata", {}).get("doc_type", "")
-            text = chunk.get("text", "")
-            if text:
-                evidence_texts.append(f"[{doc_type}]\n{text}")
-        
-        evidence_context = "\n\n".join(evidence_texts)
-        
-        # 사용자 패턴 요약
-        spending_summary = []
-        spending = user_pattern.get("spending", {})
+            text = (chunk.get("text") or "").strip()
+            if not text:
+                continue
+            doc_type = (chunk.get("metadata", {}) or {}).get("doc_type", "")
+            header = f"[{doc_type}]\n" if doc_type else ""
+            parts.append(f"{header}{text}")
+        return "\n\n".join(parts).strip()
+
+    @staticmethod
+    def _build_user_summary(user_pattern: Dict) -> str:
+        spending = user_pattern.get("spending", {}) or {}
+        constraints = user_pattern.get("constraints", {}) or {}
+        must_include = constraints.get("must_include_categories", []) or []
+
+        lines: List[str] = []
         for category, data in spending.items():
             if isinstance(data, dict):
-                amount = data.get("amount", 0)
-                if amount > 0:
-                    spending_summary.append(f"{category}: {amount:,}원/월")
-            elif isinstance(data, (int, float)):
-                if data > 0:
-                    spending_summary.append(f"{category}: {data:,}원/월")
+                amount = float(data.get("amount", 0) or 0)
+            else:
+                amount = float(data or 0) if isinstance(
+                    data, (int, float)) else 0.0
 
-        # must_include_categories 추가
-        constraints = user_pattern.get("constraints", {})
-        must_include = constraints.get("must_include_categories", [])
+            if amount > 0:
+                lines.append(f"{category}: {int(amount):,}원/월")
 
-        user_summary_parts = []
-        if spending_summary:
-            user_summary_parts.append("**구체적인 지출 금액:**\n" + "\n".join(spending_summary))
-
+        parts: List[str] = []
+        if lines:
+            parts.append("**구체적인 지출 금액:**\n" + "\n".join(lines))
         if must_include:
-            user_summary_parts.append("**사용자가 관심있는 카테고리:**\n" + ", ".join(must_include))
+            parts.append("**사용자가 관심있는 카테고리:**\n" +
+                         ", ".join(map(str, must_include)))
 
-        user_summary = "\n\n".join(user_summary_parts) if user_summary_parts else "구체적인 소비 금액 정보 없음"
-        
-        # LLM 호출
-        function_schema = self._get_function_schema()
-        
+        return "\n\n".join(parts).strip() if parts else "구체적인 소비 금액 정보 없음"
+
+    @measure_time("analyze_one")
+    async def analyze_one(self, user_pattern: Dict, card_context: Dict) -> Dict:
+        evidence_context = self._build_evidence_context(card_context)
+        user_summary = self._build_user_summary(user_pattern)
+
         prompt = f"""다음은 사용자의 소비 패턴과 카드 혜택 정보입니다.
 
 [사용자 소비 패턴]
@@ -129,102 +114,89 @@ class BenefitAnalyzer:
 {evidence_context}
 
 위 정보를 바탕으로:
-1. **사용자가 관심있는 카테고리**에 이 카드의 혜택이 있는지 확인하세요.
-2. 구체적인 금액이 없어도, 사용자가 관심있는 카테고리에 혜택이 있으면 긍정적으로 평가하세요.
-3. 예: 사용자가 'online_shopping'에 관심있고, 카드에 쿠팡/네이버쇼핑 할인이 있으면 좋은 매칭입니다.
-4. 전월실적 조건, 최소 구매금액, 월 한도 등 모든 조건을 고려하세요.
-5. 제외 항목이 있으면 warnings에 기록하세요.
-6. 계산 근거를 reasoning에 상세히 기록하세요.
+1. 사용자가 관심있는 카테고리에 이 카드의 혜택이 있는지 확인하세요.
+2. 구체적인 금액이 없어도 관심 카테고리에 혜택이 있으면 긍정적으로 평가하세요.
+3. 전월실적 조건, 최소 구매금액, 월 한도 등 모든 조건을 고려하세요.
+4. 제외 항목이 있으면 warnings에 기록하세요.
+5. 계산 근거를 reasoning에 상세히 기록하세요.
 
-중요:
-- **구체적인 금액이 없어도** 카테고리 매칭이 좋으면 이 카드가 적합하다고 판단하세요.
-- 할인율이 있으면 실제 사용 금액에 적용하여 절약액을 계산하세요.
-- 월 한도가 있으면 그 한도 내에서만 계산하세요.
-- 여러 카테고리 혜택이 있으면 각각 계산하고 category_breakdown에 기록하세요.
+전월실적 조건 처리 규칙:
+- 사용자의 전월실적 정보가 명시적으로 제공되지 않은 경우, 일반적인 소비자 기준으로 충족 가능성을 판단하세요.
+- 관심 카테고리를 정기적으로 사용한다면 충족 가능성이 높다고 가정하세요.
+- 전월실적 조건이 있으면 항상 warnings에 조건을 명시하세요. 
 
-**전월실적 조건 처리 규칙**:
-- 사용자의 전월실적 정보가 명시적으로 제공되지 않은 경우, 일반적인 소비자 기준으로 전월실적 충족 가능성을 판단하세요.
-- 사용자가 관심있는 카테고리를 정기적으로 사용한다면 조건을 충족할 가능성이 높다고 가정하세요.
-- 전월실적 조건이 있으면 항상 warnings에 조건을 명시하세요.
+그외규칙
+ - reasoning은 최대 5줄로 작성합니다.
+ - optimization_tips는 최대 3개만 작성합니다.
+ - category_breakdown은 혜택이 있는 카테고리만 포함하고 최대 5개로 제한합니다.
+ - warnings는 최대 6개로 요약합니다.
 """
-        
+
+        schema = self._function_schema()
+
         try:
-            response = self.openai_client.chat.completions.create(
+            res = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {
                         "role": "system",
-                        "content": "당신은 신용카드 혜택 분석 전문가입니다. 사용자의 소비 패턴 및 관심 카테고리와 카드 혜택을 매칭하여 적합성을 평가하고 절약액을 계산합니다. 구체적인 금액이 없어도 카테고리 매칭이 좋으면 긍정적으로 평가하세요."
+                        "content": (
+                            "당신은 신용카드 혜택 분석 전문가입니다. "
+                            "사용자의 소비 패턴/관심 카테고리와 카드 혜택을 매칭하여 적합성을 평가하고 "
+                            "절약액을 계산합니다. 구체적인 금액이 없어도 카테고리 매칭이 좋으면 긍정적으로 평가합니다."
+                        ),
                     },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
+                    {"role": "user", "content": prompt},
                 ],
-                tools=[{
-                    "type": "function",
-                    "function": function_schema
-                }],
-                tool_choice={"type": "function", "function": {"name": "analyze_benefit"}},
-                temperature=1.0  # o4-mini는 temperature=1만 지원
+                tools=[{"type": "function", "function": schema}],
+                tool_choice={"type": "function",
+                             "function": {"name": "analyze_benefit"}}
             )
-            
-            # Function call 결과 추출
-            message = response.choices[0].message
-            if message.tool_calls and len(message.tool_calls) > 0:
-                tool_call = message.tool_calls[0]
-                arguments = json.loads(tool_call.function.arguments)
-                
-                # card_id 추가
-                arguments["card_id"] = card_context.get("card_id")
-                
-                return arguments
-            else:
-                raise ValueError("Function call이 반환되지 않았습니다")
-                
+
+            msg = res.choices[0].message
+            if not msg.tool_calls:
+                raise ValueError("Function call이 반환되지 않았습니다.")
+
+            args = json.loads(msg.tool_calls[0].function.arguments)
+            args["card_id"] = card_context.get("card_id")
+            return args
+
         except Exception as e:
-            raise ValueError(f"혜택 분석 실패: {e}")
-    
-    def analyze_batch(
-        self,
-        user_pattern: Dict,
-        card_contexts: List[Dict]
-    ) -> List[Dict]:
-        """
-        여러 카드에 대해 배치 분석
-        
-        Args:
-            user_pattern: 사용자 소비 패턴
-            card_contexts: 카드 컨텍스트 리스트
-        
-        Returns:
-            분석 결과 리스트
-        """
-        results = []
-        for card_context in card_contexts:
-            try:
-                result = self.analyze(user_pattern, card_context)
-                results.append(result)
-            except Exception as e:
-                print(f"⚠️  분석 실패 (card_id={card_context.get('card_id')}): {e}")
-                # 실패한 경우 기본값
-                results.append({
-                    "card_id": card_context.get("card_id"),
-                    "monthly_savings": 0,
-                    "annual_savings": 0,
-                    "conditions_met": False,
-                    "warnings": [f"분석 실패: {str(e)}"],
-                    "category_breakdown": {}
-                })
-        
-        return results
+            raise ValueError(
+                f"혜택 분석 실패 (card_id={card_context.get('card_id')}): {e}") 
+
+    @measure_time("analyze_batch")
+    async def analyze_batch(self, user_pattern: Dict, card_contexts: List[Dict]) -> List[Dict]:
+        if not card_contexts:
+            return [] 
+        print(f"Analyzing {len(card_contexts)} cards")
+        tasks = [self.analyze_one(user_pattern, c) for c in card_contexts]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        out: List[Dict] = []
+        for i, r in enumerate(results):
+            card_id = card_contexts[i].get("card_id", "unknown")
+            if isinstance(r, Exception):
+                out.append(
+                    {
+                        "card_id": card_id,
+                        "monthly_savings": 0,
+                        "annual_savings": 0,
+                        "conditions_met": False,
+                        "warnings": [str(r)],
+                        "category_breakdown": {},
+                    }
+                )
+            else:
+                out.append(r)
+        return out
 
 
 # 사용 예시
-def main():
+async def main():
     """테스트용 메인 함수"""
     analyzer = BenefitAnalyzer()
-    
+
     user_pattern = {
         "spending": {
             "grocery": {"amount": 300000},
@@ -232,7 +204,7 @@ def main():
             "subscription_video": {"amount": 30000}
         }
     }
-    
+
     card_context = {
         "card_id": 2862,
         "evidence_chunks": [
@@ -246,11 +218,10 @@ def main():
             }
         ]
     }
-    
-    result = analyzer.analyze(user_pattern, card_context)
+
+    result = await analyzer.analyze_one(user_pattern, card_context)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
-    main()
-
+    asyncio.run(main())

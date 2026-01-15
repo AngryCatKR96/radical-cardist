@@ -15,14 +15,14 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'),
   title: {
-    default: "나에게 맞는 신용카드 추천 | 카데몬",
-    template: "%s | 카데몬",
+    default: "나에게 맞는 신용카드 추천 | 카데몽",
+    template: "%s | 카데몽",
   },
-  description: "카데몬이 여러분의 최고의 신용카드를 추천해줍니다.",
+  description: "카데몽이 여러분의 최고의 신용카드를 추천해줍니다.",
   openGraph: {
     title: "나에게 맞는 신용카드 추천",
-    description: "카데몬이 여러분의 최고의 신용카드를 추천해줍니다.",
-    siteName: "나에게 맞는 신용카드 추천 | 카데몬",
+    description: "카데몽이 여러분의 최고의 신용카드를 추천해줍니다.",
+    siteName: "나에게 맞는 신용카드 추천 | 카데몽",
     locale: "ko_KR",
     type: "website",
   },

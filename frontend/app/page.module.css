@@ -174,18 +174,119 @@
   color: #94a3b8;
   text-align: center;
   line-height: 1.6;
+  margin-top: 1rem;
+  font-size: 1rem;
+}
+
+.idleAnimationBox {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  padding: 2rem;
+  gap: 1rem;
+}
+
+.idleLottieContainer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+  border-radius: 20px;
+  padding: 1.5rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
 .loadingBox {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 1rem;
+  gap: 2rem;
   color: #4338ca;
   margin: auto;
-  min-height: 200px;
+  min-height: 400px;
   flex-direction: column;
   text-align: center;
+  padding: 2rem;
+}
+
+.lottieContainer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f8fafc;
+  border-radius: 16px;
+  padding: 1rem;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+}
+
+.loadingInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: 100%;
+  max-width: 500px;
+}
+
+.loadingTitle {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 0.25rem;
+}
+
+.loadingDesc {
+  font-size: 0.95rem;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.progressRow {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.progressBar {
+  flex: 1;
+  height: 10px;
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  border-radius: 999px;
+  transition: width 180ms linear;
+}
+
+.progressPercent {
+  color: #6366f1;
+  font-size: 0.875rem;
+  font-weight: 600;
+  width: 48px;
+  text-align: right;
+}
+
+.loadingHint {
+  color: #94a3b8;
+  font-size: 0.875rem;
+  margin-top: 0.25rem;
+}
+
+.loadingStageInfo {
+  color: #64748b;
+  font-size: 0.8rem;
+  margin-top: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: #f1f5f9;
+  border-radius: 8px;
+  display: inline-block;
+  align-self: center;
 }
 
 .spinner {

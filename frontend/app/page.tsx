@@ -4,6 +4,8 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./page.module.css";
 import type { RecommendResponse } from "@/types/recommendation";
+import Lottie from "lottie-react";
+import cashOrCardAnim from "@/Cash or Card.json";
 
 type RequestStatus = "idle" | "loading" | "success" | "error";
 
@@ -320,6 +322,80 @@ export default function HomePage() {
     focusTextarea();
   }, [focusTextarea]);
 
+  // 로딩 애니메이션 상태 관리
+  const [loadingStage, setLoadingStage] = useState(0);
+  const [loadingPercent, setLoadingPercent] = useState(0);
+  const loadingStartRef = useRef<number | null>(null);
+  const loadingRafRef = useRef<number | null>(null);
+
+  const STAGES = [
+    { title: "패턴 분석", desc: "소비 카테고리와 선호 혜택을 정리합니다." },
+    { title: "후보군 필터링", desc: "연회비·전월실적 조건으로 후보를 줄입니다." },
+    { title: "혜택 매칭", desc: "할인·적립 혜택을 점수화해 비교합니다." },
+    { title: "최종 정렬", desc: "상위 카드의 우선순위를 확정합니다." },
+    { title: "추천 생성", desc: "추천 이유와 함께 결과를 생성합니다." },
+  ];
+
+  const STAGE_TIMES = [0, 12000, 24000, 39000, 51000];
+
+  function clamp(n: number, min: number, max: number) {
+    return Math.max(min, Math.min(max, n));
+  }
+
+  function easeOutCubic(t: number) {
+    return 1 - Math.pow(1 - t, 3);
+  }
+
+  // 로딩 진행률 및 단계 관리
+  useEffect(() => {
+    if (status !== "loading") {
+      setLoadingStage(0);
+      setLoadingPercent(0);
+      loadingStartRef.current = null;
+      if (loadingRafRef.current) cancelAnimationFrame(loadingRafRef.current);
+      loadingRafRef.current = null;
+      return;
+    }
+
+    loadingStartRef.current = performance.now();
+
+    const tick = (now: number) => {
+      const start = loadingStartRef.current ?? now;
+      const elapsed = now - start;
+
+      // 단계 전환
+      let nextStage = 0;
+      for (let i = 0; i < STAGE_TIMES.length; i++) {
+        if (elapsed >= STAGE_TIMES[i]) nextStage = i;
+      }
+      setLoadingStage(nextStage);
+
+      // 진행률 (0 -> 95%)
+      if (status === "loading") {
+        const t = clamp(elapsed / 60000, 0, 1);
+        const eased = easeOutCubic(t);
+        const target = Math.floor(eased * 95);
+        setLoadingPercent((p) => (target > p ? target : p));
+      } else if (status === "success") {
+        // 완료 시 95~100%로 빠르게 마무리
+        setLoadingPercent((p) => {
+          const base = p < 95 ? 95 : p;
+          const next = base + Math.max(1, Math.floor((100 - base) * 0.25));
+          return next >= 100 ? 100 : next;
+        });
+      }
+
+      loadingRafRef.current = requestAnimationFrame(tick);
+    };
+
+    loadingRafRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      if (loadingRafRef.current) cancelAnimationFrame(loadingRafRef.current);
+      loadingRafRef.current = null;
+    };
+  }, [status]);
+
   return (
     <main className={styles.page}>
       <section className={styles.hero}>
@@ -401,19 +477,46 @@ export default function HomePage() {
 
         <article className={styles.resultCard} aria-live="polite">
           {status === "idle" && !result && !error && (
-            <p className={styles.placeholder}>
-              아직 추천을 받지 않았어요. 
-            </p>
+            <div className={styles.idleAnimationBox}>
+              <div className={styles.idleLottieContainer}>
+                <Lottie
+                  animationData={cashOrCardAnim as any}
+                  loop
+                  autoplay
+                  style={{ width: 300, height: 300 }}
+                />
+              </div>
+              <p className={styles.placeholder}>
+                소비 패턴을 입력하고 카드 추천을 받아보세요
+              </p>
+            </div>
           )}
 
           {status === "loading" && (
             <div className={styles.loadingBox}>
-              <img src="/cademon_sleep.png" alt="loading" style={{ width: "200px" }} />
-              <div className={styles.spinner} aria-hidden />
-              <div>
-                
-                <p>소비 패턴을 분석하고 있어요</p>
-                <small>약 1분 정도 소요될 수 있습니다.</small>
+              <div className={styles.lottieContainer}>
+                <Lottie
+                  animationData={cashOrCardAnim as any}
+                  loop
+                  autoplay
+                  style={{ width: 280, height: 280 }}
+                />
+              </div>
+              <div className={styles.loadingInfo}>
+                <div className={styles.loadingTitle}>{STAGES[loadingStage]?.title || "처리 중"}</div>
+                <div className={styles.loadingDesc}>{STAGES[loadingStage]?.desc || "계산을 진행 중입니다."}</div>
+                <div className={styles.progressRow}>
+                  <div className={styles.progressBar}>
+                    <div 
+                      className={styles.progressFill} 
+                      style={{ width: `${loadingPercent}%` }}
+                    />
+                  </div>
+                  <div className={styles.progressPercent}>{loadingPercent}%</div>
+                </div>
+                <div className={styles.loadingHint}>
+                  보통 40~60초 정도 걸립니다. 비교 계산을 진행 중입니다.
+                </div> 
               </div>
             </div>
           )}
@@ -581,6 +684,6 @@ export default function HomePage() {
           )}
         </article>
       </section>
-      </main>
+    </main>
   );
 }

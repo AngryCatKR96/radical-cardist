@@ -1,8 +1,9 @@
 .env
 **/__pycache__/
-chroma_db/
 venv/
 data/
 .DS_Store
 .agent/
 .idea/
+script/skipped_cards.json
+test/files/ret.md

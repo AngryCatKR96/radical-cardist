@@ -1,5 +1,5 @@
 {
-  "updated_at": "2025-12-03T21:40:41.147735+00:00",
+  "updated_at": "2026-01-24T08:53:19.193474+00:00",
   "entries": {
     "1": {
       "reason": "discontinued",
@@ -9128,6 +9128,42 @@
     "4000": {
       "reason": "not_found",
       "first_detected": "2025-12-03T21:40:41.147054+00:00"
+    },
+    "446": {
+      "reason": "discontinued",
+      "first_detected": "2026-01-24T08:48:08.792691+00:00"
+    },
+    "739": {
+      "reason": "discontinued",
+      "first_detected": "2026-01-24T08:48:41.778401+00:00"
+    },
+    "1694": {
+      "reason": "discontinued",
+      "first_detected": "2026-01-24T08:50:18.926686+00:00"
+    },
+    "1767": {
+      "reason": "discontinued",
+      "first_detected": "2026-01-24T08:50:26.773342+00:00"
+    },
+    "1904": {
+      "reason": "discontinued",
+      "first_detected": "2026-01-24T08:50:43.076595+00:00"
+    },
+    "2042": {
+      "reason": "discontinued",
+      "first_detected": "2026-01-24T08:50:59.673720+00:00"
+    },
+    "2099": {
+      "reason": "discontinued",
+      "first_detected": "2026-01-24T08:51:05.082102+00:00"
+    },
+    "2587": {
+      "reason": "discontinued",
+      "first_detected": "2026-01-24T08:52:14.141725+00:00"
+    },
+    "2732": {
+      "reason": "discontinued",
+      "first_detected": "2026-01-24T08:52:41.582485+00:00"
     }
   }
 }

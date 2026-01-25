@@ -20,9 +20,6 @@ ENV/
 .gitignore
 .agent/
 
-# ChromaDB data (will be created fresh or mounted)
-chroma_db/
-
 # Environment files (sensitive)
 .env
 

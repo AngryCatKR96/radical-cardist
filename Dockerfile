@@ -19,9 +19,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create ChromaDB directory
-RUN mkdir -p chroma_db
-
 # Cloud Run sets PORT environment variable, but we'll default to 8000
 ENV PORT=8000
 

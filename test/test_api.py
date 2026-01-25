@@ -27,8 +27,20 @@ import requests
 import json
 import time
 import sys
+import os
 
 BASE_URL = "http://localhost:8000"
+
+
+def _admin_headers() -> dict:
+    """
+    관리자 API 호출용 헤더 생성
+    - main.py의 require_admin_auth는 X-API-Key 헤더를 요구합니다.
+    """
+    key = os.getenv("ADMIN_API_KEY")
+    if not key:
+        return {}
+    return {"X-API-Key": key}
 
 # 테스트 모드 파싱
 TEST_MODE = "full"  # full, lite, single
@@ -172,15 +184,20 @@ def test_admin_stats():
     """관리자 API - 벡터 DB 통계 확인"""
     print("\n[TEST] 벡터 DB 통계 확인 중...")
     try:
-        response = requests.get(f"{BASE_URL}/admin/cards/stats")
+        response = requests.get(f"{BASE_URL}/admin/cards/stats", headers=_admin_headers())
         if response.status_code == 200:
             data = response.json()
             print(f"[OK] 벡터 DB 통계:")
             print(f"    총 문서 수: {data.get('total_documents', 0):,}개")
             print(f"    총 카드 수: {data.get('total_cards', 0):,}개")
-            print(f"    컬렉션: {data.get('collection_name', 'N/A')}")
-            print(f"    경로: {data.get('chroma_db_path', 'N/A')}")
+            print(f"    컬렉션: {data.get('collection_name', 'N/A')}") 
             return data.get('total_cards', 0) > 0
+        elif response.status_code == 401:
+            print("[FAIL] 통계 조회 실패: 401")
+            print("       오류: 관리자 API key가 필요합니다. X-API-Key 헤더를 추가해주세요.")
+            print("       해결: .env에 ADMIN_API_KEY를 설정하고, 테스트 실행 시 환경변수로 로드되게 하세요.")
+            print("       예) export ADMIN_API_KEY='...'; python test/test_api.py --lite")
+            return False
         elif response.status_code == 503:
             print("[WARN] 임베딩 서비스 초기화 필요")
             return False
@@ -195,17 +212,20 @@ def test_admin_stats():
 def test_admin_reset():
     """관리자 API - 벡터 DB 초기화 테스트"""
     print("\n[TEST] 벡터 DB 초기화 테스트 중...")
-    print("    ⚠️  경고: 모든 카드 데이터가 삭제됩니다!")
+    print("    ⚠️  경고: embeddings(임베딩) 데이터가 초기화됩니다!")
     
     try:
-        response = requests.delete(f"{BASE_URL}/admin/cards/reset")
+        response = requests.delete(f"{BASE_URL}/admin/cards/reset", headers=_admin_headers())
         
         if response.status_code == 200:
             data = response.json()
             print(f"    [OK] 초기화 성공!")
-            print(f"    삭제된 문서: {data.get('deleted_documents', 0):,}개")
-            print(f"    컬렉션: {data.get('collection_name', 'N/A')}")
+            print(f"    수정된 문서: {data.get('modified_documents', 0):,}개")
             return True
+        elif response.status_code == 401:
+            print("    [FAIL] 초기화 실패: 401")
+            print("    오류: 관리자 API key가 필요합니다. X-API-Key 헤더를 추가해주세요.")
+            return False
         elif response.status_code == 503:
             print(f"    [WARN] 임베딩 서비스 초기화 필요")
             return False
@@ -234,7 +254,8 @@ def test_admin_sync_single():
     try:
         response = requests.post(
             f"{BASE_URL}/admin/cards/{test_card_id}",
-            params={"overwrite": True}
+            params={"overwrite": True},
+            headers=_admin_headers(),
         )
         
         if response.status_code == 200:
@@ -243,6 +264,10 @@ def test_admin_sync_single():
             print(f"    카드명: {data.get('card_name', 'N/A')}")
             print(f"    발급사: {data.get('issuer', 'N/A')}")
             return True
+        elif response.status_code == 401:
+            print(f"    [FAIL] 동기화 실패: 401")
+            print("    오류: 관리자 API key가 필요합니다. X-API-Key 헤더를 추가해주세요.")
+            return False
         elif response.status_code == 404:
             print(f"    [WARN] 카드를 찾을 수 없거나 단종된 카드")
             return False

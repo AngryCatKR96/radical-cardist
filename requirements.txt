@@ -2,14 +2,6 @@
 fastapi>=0.104.0
 uvicorn>=0.24.0
 
-# LlamaIndex ecosystem (let pip resolve compatible versions)
-llama-index
-llama-index-llms-openai
-llama-index-vector-stores-chroma
-
-# Vector database
-chromadb>=0.4.22
-
 # MongoDB
 pymongo>=4.6.0
 motor>=3.3.0

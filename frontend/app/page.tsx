@@ -480,7 +480,7 @@ export default function HomePage() {
             <div className={styles.idleAnimationBox}>
               <div className={styles.idleLottieContainer}>
                 <Lottie
-                  animationData={cashOrCardAnim as any}
+                  animationData={cashOrCardAnim as unknown as object}
                   loop
                   autoplay
                   style={{ width: 300, height: 300 }}
@@ -496,7 +496,7 @@ export default function HomePage() {
             <div className={styles.loadingBox}>
               <div className={styles.lottieContainer}>
                 <Lottie
-                  animationData={cashOrCardAnim as any}
+                  animationData={cashOrCardAnim as unknown as object}
                   loop
                   autoplay
                   style={{ width: 280, height: 280 }}

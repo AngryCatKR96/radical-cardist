@@ -168,19 +168,8 @@ gcloud run services delete radical-cardist-frontend \
 
 ## ⚠️ 주의사항
 
-### 1. ChromaDB 데이터 영속성
-현재 설정에서는 ChromaDB 데이터가 컨테이너 재시작 시 초기화됩니다.
-프로덕션 배포 시 다음 중 하나를 선택:
-
-**옵션 A: Cloud Storage 백업**
-```python
-# 주기적으로 chroma_db를 Cloud Storage에 백업
-import gcloud.storage
-```
-
-**옵션 B: Cloud SQL + pgvector**
-- PostgreSQL with pgvector extension 사용
-- 영구 저장 보장
+### 1. Vector DB 영속성
+현재 구현은 MongoDB Atlas(또는 MongoDB 호스팅)의 `cards` 컬렉션에 임베딩을 저장합니다. 
 
 ### 2. Cold Start
 - 트래픽이 없으면 인스턴스가 종료됨

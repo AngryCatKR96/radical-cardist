@@ -8,7 +8,7 @@ MongoDB Vector Search에서 벡터 검색을 수행하고,
 import math
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-from openai import OpenAI
+from langchain_openai import OpenAIEmbeddings
 import os
 from dotenv import load_dotenv
 
@@ -16,34 +16,35 @@ load_dotenv()
 
 
 class CardVectorStore:
-    """벡터 스토어 검색 클래스 (MongoDB 전용)"""
+    """벡터 스토어 검색 클래스 (MongoDB 전용) - LangChain 기반"""
 
     def __init__(self):
-        """CardVectorStore 초기화 (MongoDB 전용)"""
-        self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        """CardVectorStore 초기화 (MongoDB 전용) - LangChain OpenAIEmbeddings 사용"""
+        # LangChain OpenAIEmbeddings로 교체
+        self.embeddings = OpenAIEmbeddings(
+            model="text-embedding-3-small",
+            openai_api_key=os.getenv("OPENAI_API_KEY")
+        )
 
         # MongoDB 연결 (필수)
         from database.mongodb_client import MongoDBClient
         self.mongo_client = MongoDBClient()
         self.cards_collection = self.mongo_client.get_collection("cards")
-        print("✅ CardVectorStore: MongoDB 연결됨")
+        print("✅ CardVectorStore: LangChain OpenAIEmbeddings로 MongoDB 연결됨")
     
     def _generate_query_embedding(self, query_text: str) -> List[float]:
         """
-        질의 텍스트를 임베딩으로 변환
-        
+        질의 텍스트를 임베딩으로 변환 - LangChain OpenAIEmbeddings 사용
+
         Args:
             query_text: 검색 질의
-        
+
         Returns:
             임베딩 벡터
         """
         try:
-            response = self.openai_client.embeddings.create(
-                model="text-embedding-3-small",
-                input=[query_text]
-            )
-            return response.data[0].embedding
+            # LangChain embed_query 메서드 사용
+            return self.embeddings.embed_query(query_text)
         except Exception as e:
             raise ValueError(f"임베딩 생성 실패: {e}")
     

@@ -1,8 +1,11 @@
 """
-추천 Agent
+추천 Agent - LangChain Tool 호환
 
 여러 후보 카드 중에서 최종 1장을 선택합니다.
 정량적 점수 계산과 타이브레이커를 통해 최적의 카드를 선정합니다.
+
+이 클래스는 LangGraph 노드에서 직접 호출되며, 순수 Python 로직으로 구현되어
+Tool로 래핑하지 않아도 재사용 가능합니다.
 """
 
 from typing import Dict, List, Optional

@@ -9,7 +9,7 @@ import os
 import re
 import html as _html
 from typing import Any, Dict, List, Optional, Tuple
-from openai import OpenAI
+from langchain_openai import OpenAIEmbeddings
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -622,42 +622,39 @@ def create_documents(card_data: Dict) -> Tuple[List[Dict], List[Dict]]:
 
 
 class EmbeddingGenerator:
-    """임베딩 생성 및 저장 클래스 (MongoDB 전용)"""
+    """임베딩 생성 및 저장 클래스 (MongoDB 전용) - LangChain 기반"""
 
     def __init__(self):
-        """EmbeddingGenerator 초기화 (MongoDB 전용)"""
-        self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        """EmbeddingGenerator 초기화 (MongoDB 전용) - LangChain OpenAIEmbeddings 사용"""
+        # LangChain OpenAIEmbeddings로 교체
+        self.embeddings = OpenAIEmbeddings(
+            model="text-embedding-3-small",
+            openai_api_key=os.getenv("OPENAI_API_KEY")
+        )
 
         # MongoDB 연결 (필수)
         from database.mongodb_client import MongoDBClient
         self.mongo_client = MongoDBClient()
         self.cards_collection = self.mongo_client.get_collection("cards")
-        print("✅ EmbeddingGenerator: MongoDB 연결됨")
+        print("✅ EmbeddingGenerator: LangChain OpenAIEmbeddings로 MongoDB 연결됨")
     
     def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
-        텍스트 리스트를 임베딩으로 변환
-        
+        텍스트 리스트를 임베딩으로 변환 - LangChain OpenAIEmbeddings 사용
+
         Args:
             texts: 텍스트 리스트
-        
+
         Returns:
             임베딩 벡터 리스트
         """
         if not texts:
             return []
-        
-        # OpenAI API 입력 길이/레이트 제한을 고려해 배치 처리
+
+        # LangChain embed_documents는 자동으로 배치 처리 수행
         try:
-            all_embeddings: List[List[float]] = []
-            batch_size = 128  # 보수적 기본값
-            for i in range(0, len(texts), batch_size):
-                batch = texts[i:i + batch_size]
-                response = self.openai_client.embeddings.create(
-                    model="text-embedding-3-small",
-                    input=batch
-                )
-                all_embeddings.extend([item.embedding for item in response.data])
+            # LangChain의 embed_documents 메서드 사용
+            all_embeddings = self.embeddings.embed_documents(texts)
             return all_embeddings
         except Exception as e:
             print(f"❌ 임베딩 생성 실패: {e}")

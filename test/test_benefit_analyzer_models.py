@@ -27,7 +27,7 @@ MODELS = {
     "gpt-5": "최신 플래그십 모델",
     "gpt-5.1": "개선된 추론 모델",
     "gpt-5.2": "최신 추론 모델",
-    "o4-mini": "수학/추론 특화 모델"
+    "o4-mini": "수학/추론 특화 모델",
 }
 
 # 비용 정보 (per 1M tokens)
@@ -37,7 +37,7 @@ PRICING = {
     "gpt-5": {"input": 2.50, "output": 10.00},  # 예상
     "gpt-5.1": {"input": 3.00, "output": 12.00},  # 예상
     "gpt-5.2": {"input": 3.50, "output": 14.00},  # 예상
-    "o4-mini": {"input": 1.10, "output": 4.40}
+    "o4-mini": {"input": 1.10, "output": 4.40},
 }
 
 
@@ -57,38 +57,40 @@ class BenefitAnalyzerTester:
                 "properties": {
                     "monthly_savings": {
                         "type": "number",
-                        "description": "월 예상 절약액 (원)"
+                        "description": "월 예상 절약액 (원)",
                     },
                     "annual_savings": {
                         "type": "number",
-                        "description": "연 예상 절약액 (원)"
+                        "description": "연 예상 절약액 (원)",
                     },
                     "conditions_met": {
                         "type": "boolean",
-                        "description": "전월실적 등 조건 충족 여부"
+                        "description": "전월실적 등 조건 충족 여부",
                     },
                     "warnings": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "주의사항 (전월실적 미충족, 한도 초과, 제외 항목 등)"
+                        "description": "주의사항 (전월실적 미충족, 한도 초과, 제외 항목 등)",
                     },
                     "category_breakdown": {
                         "type": "object",
                         "description": "카테고리별 월 절약액 (원)",
-                        "additionalProperties": {"type": "number"}
+                        "additionalProperties": {"type": "number"},
                     },
                     "optimization_tips": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "혜택 최대화를 위한 사용 전략"
+                        "description": "혜택 최대화를 위한 사용 전략",
                     },
-                    "reasoning": {
-                        "type": "string",
-                        "description": "계산 근거 및 가정"
-                    }
+                    "reasoning": {"type": "string", "description": "계산 근거 및 가정"},
                 },
-                "required": ["monthly_savings", "annual_savings", "conditions_met", "warnings"]
-            }
+                "required": [
+                    "monthly_savings",
+                    "annual_savings",
+                    "conditions_met",
+                    "warnings",
+                ],
+            },
         }
 
     def test_model(self, model: str, test_cases: List[Dict]) -> List[Dict]:
@@ -111,8 +113,8 @@ class BenefitAnalyzerTester:
             print(f"예상 답: 월 {test_case['expected_monthly_savings']:,}원")
 
             # 프롬프트 생성
-            user_summary = test_case['user_pattern']
-            evidence_context = test_case['card_benefits']
+            user_summary = test_case["user_pattern"]
+            evidence_context = test_case["card_benefits"]
 
             prompt = f"""다음은 사용자의 소비 패턴과 카드 혜택 정보입니다.
 
@@ -148,11 +150,14 @@ class BenefitAnalyzerTester:
                     model=model,
                     messages=[
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt}
+                        {"role": "user", "content": prompt},
                     ],
                     tools=[{"type": "function", "function": function_schema}],
-                    tool_choice={"type": "function", "function": {"name": "analyze_benefit"}},
-                    temperature=temperature
+                    tool_choice={
+                        "type": "function",
+                        "function": {"name": "analyze_benefit"},
+                    },
+                    temperature=temperature,
                 )
 
                 elapsed_time = time.time() - start_time
@@ -163,10 +168,9 @@ class BenefitAnalyzerTester:
                 output_tokens = usage.completion_tokens
 
                 # 비용 계산
-                cost = (
-                    (input_tokens / 1_000_000) * PRICING[model]["input"] +
-                    (output_tokens / 1_000_000) * PRICING[model]["output"]
-                )
+                cost = (input_tokens / 1_000_000) * PRICING[model]["input"] + (
+                    output_tokens / 1_000_000
+                ) * PRICING[model]["output"]
 
                 # Function call 결과 추출
                 message = response.choices[0].message
@@ -181,35 +185,43 @@ class BenefitAnalyzerTester:
                     reasoning = result_data.get("reasoning", "")
 
                     # 정확도 계산
-                    expected = test_case['expected_monthly_savings']
-                    error_rate = abs(monthly_savings - expected) / expected * 100 if expected > 0 else 0
+                    expected = test_case["expected_monthly_savings"]
+                    error_rate = (
+                        abs(monthly_savings - expected) / expected * 100
+                        if expected > 0
+                        else 0
+                    )
 
                     print(f"✓ 성공")
                     print(f"  - 소요시간: {elapsed_time:.2f}초")
                     print(f"  - Input 토큰: {input_tokens:,}")
                     print(f"  - Output 토큰: {output_tokens:,}")
                     print(f"  - 비용: ${cost:.6f}")
-                    print(f"  - 계산 결과: 월 {monthly_savings:,}원 (연 {annual_savings:,}원)")
+                    print(
+                        f"  - 계산 결과: 월 {monthly_savings:,}원 (연 {annual_savings:,}원)"
+                    )
                     print(f"  - 오차율: {error_rate:.1f}%")
                     print(f"  - 조건 충족: {'예' if conditions_met else '아니오'}")
                     if warnings:
                         print(f"  - 주의사항: {', '.join(warnings[:2])}")
                     print(f"  - 계산 근거: {reasoning[:100]}...")
 
-                    results.append({
-                        "success": True,
-                        "elapsed_time": elapsed_time,
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                        "cost": cost,
-                        "monthly_savings": monthly_savings,
-                        "annual_savings": annual_savings,
-                        "expected_monthly_savings": expected,
-                        "error_rate": error_rate,
-                        "conditions_met": conditions_met,
-                        "warnings": warnings,
-                        "reasoning": reasoning
-                    })
+                    results.append(
+                        {
+                            "success": True,
+                            "elapsed_time": elapsed_time,
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "cost": cost,
+                            "monthly_savings": monthly_savings,
+                            "annual_savings": annual_savings,
+                            "expected_monthly_savings": expected,
+                            "error_rate": error_rate,
+                            "conditions_met": conditions_met,
+                            "warnings": warnings,
+                            "reasoning": reasoning,
+                        }
+                    )
                 else:
                     print(f"✗ 실패: Function call 없음")
                     results.append({"success": False, "error": "No function call"})
@@ -226,7 +238,9 @@ class BenefitAnalyzerTester:
         print(f"BenefitAnalyzer - 모델 비교 요약")
         print(f"{'='*70}")
 
-        print(f"\n{'모델':<25} {'평균 시간':>12} {'평균 비용':>12} {'평균 오차':>12} {'성공률':>10}")
+        print(
+            f"\n{'모델':<25} {'평균 시간':>12} {'평균 비용':>12} {'평균 오차':>12} {'성공률':>10}"
+        )
         print("-" * 70)
 
         for model, results in model_results.items():
@@ -237,7 +251,9 @@ class BenefitAnalyzerTester:
                 avg_error = sum(r["error_rate"] for r in successful) / len(successful)
                 success_rate = len(successful) / len(results) * 100
 
-                print(f"{model:<25} {avg_time:>10.2f}초 ${avg_cost:>10.6f} {avg_error:>10.1f}% {success_rate:>9.0f}%")
+                print(
+                    f"{model:<25} {avg_time:>10.2f}초 ${avg_cost:>10.6f} {avg_error:>10.1f}% {success_rate:>9.0f}%"
+                )
 
         print()
 
@@ -259,9 +275,8 @@ def get_test_cases() -> List[Dict]:
 [제외항목]
 - 없음
 """,
-            "expected_monthly_savings": 20000  # 200,000 * 10% = 20,000 (한도 내)
+            "expected_monthly_savings": 20000,  # 200,000 * 10% = 20,000 (한도 내)
         },
-
         # 케이스 2: 복잡한 조건 (한도 초과)
         {
             "name": "한도 초과 케이스",
@@ -276,9 +291,8 @@ def get_test_cases() -> List[Dict]:
 [제외항목]
 - 온라인 마트 제외
 """,
-            "expected_monthly_savings": 10000  # 500,000 * 5% = 25,000 -> 한도 10,000
+            "expected_monthly_savings": 10000,  # 500,000 * 5% = 25,000 -> 한도 10,000
         },
-
         # 케이스 3: 여러 카테고리 혜택
         {
             "name": "다중 카테고리",
@@ -298,9 +312,8 @@ def get_test_cases() -> List[Dict]:
 [제외항목]
 - 국세, 지방세, 공과금
 """,
-            "expected_monthly_savings": 35000  # 15,000 + 10,000 + 12,000 (각 한도 내)
+            "expected_monthly_savings": 35000,  # 15,000 + 10,000 + 12,000 (각 한도 내)
         },
-
         # 케이스 4: 전월실적 미충족
         {
             "name": "전월실적 미충족",
@@ -315,9 +328,8 @@ def get_test_cases() -> List[Dict]:
 [제외항목]
 - 없음
 """,
-            "expected_monthly_savings": 0  # 전월실적 미충족으로 혜택 없음
+            "expected_monthly_savings": 0,  # 전월실적 미충족으로 혜택 없음
         },
-
         # 케이스 5: 복잡한 계산 (건당 최소 금액)
         {
             "name": "건당 최소 금액 조건",
@@ -336,9 +348,8 @@ def get_test_cases() -> List[Dict]:
 [제외항목]
 - 기타 카페는 혜택 없음
 """,
-            "expected_monthly_savings": 0  # 건당 5,000원으로 최소금액 미충족
+            "expected_monthly_savings": 0,  # 건당 5,000원으로 최소금액 미충족
         },
-
         # 케이스 6: 구간별 할인율
         {
             "name": "구간별 할인율",
@@ -355,23 +366,17 @@ def get_test_cases() -> List[Dict]:
 [제외항목]
 - 해외직구 제외
 """,
-            "expected_monthly_savings": 24000  # (300,000 * 5%) + (300,000 * 3%) = 15,000 + 9,000
-        }
+            "expected_monthly_savings": 24000,  # (300,000 * 5%) + (300,000 * 3%) = 15,000 + 9,000
+        },
     ]
 
 
 def main():
     parser = argparse.ArgumentParser(description="BenefitAnalyzer 모델 비교 테스트")
     parser.add_argument(
-        "--model",
-        choices=list(MODELS.keys()),
-        help="테스트할 모델 선택"
+        "--model", choices=list(MODELS.keys()), help="테스트할 모델 선택"
     )
-    parser.add_argument(
-        "--all",
-        action="store_true",
-        help="모든 모델 테스트"
-    )
+    parser.add_argument("--all", action="store_true", help="모든 모델 테스트")
 
     args = parser.parse_args()
 
@@ -381,13 +386,15 @@ def main():
     tester = BenefitAnalyzerTester()
     test_cases = get_test_cases()
 
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("BenefitAnalyzer 모델 비교 테스트")
-    print("="*70)
+    print("=" * 70)
     print(f"\n테스트 케이스 수: {len(test_cases)}")
     print("테스트 시나리오:")
     for i, tc in enumerate(test_cases, 1):
-        print(f"  {i}. {tc['name']} - 예상 절약액: 월 {tc['expected_monthly_savings']:,}원")
+        print(
+            f"  {i}. {tc['name']} - 예상 절약액: 월 {tc['expected_monthly_savings']:,}원"
+        )
 
     models_to_test = list(MODELS.keys()) if args.all else [args.model]
     model_results = {}
@@ -401,9 +408,9 @@ def main():
 
     tester.print_summary(model_results)
 
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("테스트 완료!")
-    print("="*70)
+    print("=" * 70)
 
 
 if __name__ == "__main__":

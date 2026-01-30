@@ -1,9 +1,11 @@
 from fastapi import FastAPI, HTTPException, Query, Body, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from contextlib import asynccontextmanager
 import uvicorn
 import os
+import json
+import time
 from datetime import datetime
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -14,11 +16,10 @@ from security.request_logger import RequestLogger, RequestTimer
 from security.ip_utils import get_client_ip
 from security.rate_limiter import rate_limit_dependency, RateLimiter
 
-# 새로운 RAG + Agentic 모듈
-from agents.input_parser import InputParser
-from agents.benefit_analyzer import BenefitAnalyzer
-from agents.recommender import Recommender
-from agents.response_generator import ResponseGenerator
+# LangGraph 파이프라인
+from pipeline.graph import build_recommendation_graph
+
+# Admin 라우터에서 사용하는 모듈
 from vector_store.vector_store import CardVectorStore
 from vector_store.embeddings import EmbeddingGenerator
 from data_collection.card_gorilla_client import CardGorillaClient
@@ -28,11 +29,10 @@ from admin.routes import router as admin_router
 # 환경 변수 로드
 load_dotenv()
 
-# RAG + Agentic 서비스 전역 변수
-input_parser = None
-benefit_analyzer = None
-recommender = None
-response_generator = None
+# LangGraph 파이프라인
+recommendation_graph = None
+
+# Admin 라우터에서 사용하는 서비스
 vector_store = None
 embedding_generator = None
 card_client = None
@@ -177,24 +177,31 @@ async def lifespan(app: FastAPI):
         print("   .env 파일의 MONGODB_URI를 확인하세요")
         raise
 
-    # RAG + Agentic 서비스 초기화
+    # LangGraph 파이프라인 초기화
     try:
-        global input_parser, benefit_analyzer, recommender, response_generator, vector_store, embedding_generator, card_client
-        input_parser = InputParser()
-        benefit_analyzer = BenefitAnalyzer()
-        recommender = Recommender()
-        response_generator = ResponseGenerator()
+        global recommendation_graph
+        recommendation_graph = build_recommendation_graph()
+        app.state.recommendation_graph = recommendation_graph
+        print("✅ LangGraph 파이프라인이 성공적으로 초기화되었습니다.")
+    except Exception as e:
+        print(f"⚠️  LangGraph 파이프라인 초기화 실패: {str(e)}")
+        print("   /recommend/natural-language 엔드포인트는 사용할 수 없습니다.")
+
+    # Admin 라우터용 서비스 초기화
+    try:
+        global vector_store, embedding_generator, card_client
         vector_store = CardVectorStore()
         embedding_generator = EmbeddingGenerator()
         card_client = CardGorillaClient()
-        # 라우터 모듈에서 접근할 수 있도록 app.state에도 저장
+
+        # 라우터 모듈에서 접근할 수 있도록 app.state에 저장
         app.state.vector_store = vector_store
         app.state.embedding_generator = embedding_generator
         app.state.card_client = card_client
-        print("✅ RAG + Agentic 서비스가 성공적으로 초기화되었습니다.")
+        print("✅ Admin 서비스가 성공적으로 초기화되었습니다.")
     except Exception as e:
-        print(f"⚠️  RAG + Agentic 서비스 초기화 실패: {str(e)}")
-        print("   /recommend/natural-language 엔드포인트는 사용할 수 없습니다.")
+        print(f"⚠️  Admin 서비스 초기화 실패: {str(e)}")
+        print("   일부 관리자 기능이 제한될 수 있습니다.")
 
     # Security 인덱스 초기화
     try:
@@ -234,11 +241,11 @@ async def root():
     """루트 엔드포인트 - 서비스 정보를 반환합니다."""
     return {
         "service": "신용카드 추천 서비스",
-        "version": "2.0.0",
-        "description": "사용자의 소비 패턴을 분석하여 최적의 신용카드를 추천합니다 (RAG + Agentic)",
+        "version": "3.0.0",
+        "description": "사용자의 소비 패턴을 분석하여 최적의 신용카드를 추천합니다 (LangChain + LangGraph)",
         "endpoints": {
-            "POST /recommend/natural-language": "자연어 입력 기반 카드 추천",
-            "POST /recommend/structured": "구조화된 입력 기반 카드 추천",
+            "POST /recommend/natural-language": "자연어 입력 기반 카드 추천 (LangGraph)",
+            "POST /recommend/natural-language/stream": "자연어 입력 기반 카드 추천 (실시간 스트리밍)",
             "GET /health": "서비스 상태 확인",
             "POST /admin/cards/fetch": "1단계: 카드고릴라에서 데이터 수집 (관리자)",
             "POST /admin/cards/embed": "2단계: JSON을 임베딩으로 변환 (관리자)",
@@ -254,7 +261,8 @@ async def health_check():
     """서비스 상태를 확인합니다."""
     return {
         "status": "healthy",
-        "rag_service": "available" if vector_store else "unavailable",
+        "langgraph_pipeline": "available" if recommendation_graph else "unavailable",
+        "admin_services": "available" if all([vector_store, embedding_generator, card_client]) else "partial",
         "openai_api_key": "configured" if os.getenv("OPENAI_API_KEY") and os.getenv("OPENAI_API_KEY") != "your_openai_api_key_here" else "not_configured"
     }
 
@@ -329,96 +337,54 @@ async def recommend_natural_language(
                 detail=attack_error.detail
             )
 
-        if not all([input_parser, benefit_analyzer, recommender, response_generator, vector_store]):
+        if not recommendation_graph:
             raise HTTPException(
                 status_code=503,
                 detail="RAG + Agentic 서비스를 사용할 수 없습니다. 서비스 초기화를 확인해주세요."
             )
-        
+
         # 전체 처리 시작
-        print(f"\n[PERF] ========== 전체 처리 시작 ==========")
-
-        # 1. 입력 파싱
-        print(f"\n[INFO] Step 1: Input Parsing")
+        print(f"\n[PERF] ========== 전체 처리 시작 (LangGraph) ==========")
         print(f"Input: {user_input}")
-        user_intent = input_parser.parse(user_input)
-        timer.mark_step("step1_input_parsing_ms")
-        print(f"Parsed Intent: {user_intent}")
-        print(f"[PERF] Step 1 완료")
-        
-        # 2. 벡터 검색 (Top-M 후보 선정)
-        query_text = user_intent.get("query_text", user_input)
-        filters = user_intent.get("filters", {})
-        
-        # None 값을 가진 필터 키 제거
-        if filters:
-            filters = {k: v for k, v in filters.items() if v is not None}
-        
-        print(f"\n[INFO] Step 2: Vector Search")
-        print(f"Query: {query_text}")
-        print(f"Filters: {filters}")
 
-        candidates = vector_store.search_cards(query_text, filters, top_m=5)
-        timer.mark_step("step2_vector_search_ms")
-        print(f"Candidates Found: {len(candidates)}")
-        for i, c in enumerate(candidates):
-            print(f"  [{i+1}] ID: {c.get('card_id')} (Score: {c.get('aggregate_score', 0.0):.4f})")
-        print(f"[PERF] Step 2 완료")
-        
-        if not candidates:
-            print("[INFO] No candidates found. Returning error.")
-            raise HTTPException(
-                status_code=404,
-                detail="조건에 맞는 카드를 찾을 수 없습니다. 연회비/전월실적 조건을 완화해 다시 시도해보세요."
-            )
-        
-        # 3. 혜택 분석
-        print(f"\n[INFO] Step 3: Benefit Analysis")
-        user_pattern = {
-            "spending": user_intent.get("spending", {}),
-            "preferences": user_intent.get("preferences", {}),
-            "constraints": user_intent.get("constraints", {})
+        # LangGraph 파이프라인 실행
+        initial_state = {
+            "user_input": user_input,
+            "intermediate_steps": []
         }
-        print(f"User Pattern: {user_pattern}")
 
-        card_contexts = [
-            {
-                "card_id": c["card_id"],
-                "evidence_chunks": c["evidence_chunks"]
-            }
-            for c in candidates
-        ]
-
-        analysis_results = await benefit_analyzer.analyze_batch(user_pattern, card_contexts)
-        timer.mark_step("step3_benefit_analysis_ms")
-        print(f"Analysis Results: {len(analysis_results)} cards analyzed")
-        print(f"[PERF] Step 3 완료")
-        
-        # 4. 최종 선택
-        print(f"\n[INFO] Step 4: Final Selection")
-        recommendation_result = recommender.select_best_card(
-            analysis_results,
-            user_preferences=user_intent.get("preferences")
-        )
-        timer.mark_step("step4_recommendation_ms")
-        print(f"Selected Card ID: {recommendation_result.get('selected_card')}")
-        print(f"Net Benefit: {recommendation_result.get('score_breakdown', {}).get('net_benefit')}")
-        print(f"[PERF] Step 4 완료")
-        
-        # 5. 응답 생성
-        print(f"\n[INFO] Step 5: Response Generation")
-        recommendation_text = response_generator.generate(
-            recommendation_result,
-            user_pattern=user_pattern
-        )
-        timer.mark_step("step5_response_generation_ms")
-        print("Response generated successfully.")
-        print(f"[PERF] Step 5 완료")
+        config = {"configurable": {"thread_id": f"request_{ip_address}_{int(time.time())}"}}
+        result = await recommendation_graph.ainvoke(initial_state, config)
 
         # 전체 처리 완료
         total_time_seconds = timer.get_total_time() / 1000
         print(f"\n[PERF] ========== 전체 처리 완료: {total_time_seconds:.3f}초 ==========")
-        print(f"[PERF] 단계별 시간: {timer.get_performance_dict()}")
+
+        # 에러 체크
+        if result.get("parsing_error"):
+            raise HTTPException(status_code=400, detail=f"입력 파싱 실패: {result['parsing_error']}")
+
+        if result.get("search_error"):
+            raise HTTPException(status_code=404, detail=f"카드 검색 실패: {result['search_error']}")
+
+        if result.get("analysis_error"):
+            raise HTTPException(status_code=500, detail=f"혜택 분석 실패: {result['analysis_error']}")
+
+        if result.get("recommendation_error"):
+            raise HTTPException(status_code=500, detail=f"카드 선택 실패: {result['recommendation_error']}")
+
+        if result.get("response_error"):
+            raise HTTPException(status_code=500, detail=f"응답 생성 실패: {result['response_error']}")
+
+        # 결과 추출
+        recommendation_result = result["selected_card"]
+        recommendation_text = result["final_response"]
+
+        # 성능 메트릭 (중간 단계에서 추출)
+        for step in result.get("intermediate_steps", []):
+            stage = step.get("stage")
+            if stage:
+                timer.mark_step(f"{stage}_ms")
         
         selected_card_id = recommendation_result["selected_card"]
         card_context = load_compressed_context(selected_card_id)
@@ -576,100 +542,95 @@ async def recommend_natural_language(
         )
 
 
-@app.post("/recommend/structured")
-async def recommend_structured(user_intent: dict):
+@app.post(
+    "/recommend/natural-language/stream",
+    summary="자연어 소비 패턴으로 카드 추천 (스트리밍)",
+    dependencies=[Depends(rate_limit_dependency)]
+)
+async def recommend_natural_language_stream(
+    request: Request,
+    payload: NaturalLanguageRequest
+):
     """
-    구조화된 입력 기반 카드 추천
-    
-    이미 구조화된 UserIntent를 입력하면, 벡터 검색 단계부터 시작합니다.
-    
-    - **user_intent**: UserIntent JSON 객체
-    
-    파이프라인:
-    1. 벡터 검색으로 후보 Top-M 선정 (입력 파싱 생략)
-    2. 혜택 분석 (Benefit Analyzer)
-    3. 최종 1장 선택 (Recommender)
-    4. 응답 생성 (Response Generator)
+    자연어 입력 기반 카드 추천 (실시간 스트리밍)
+
+    사용자가 자연어로 소비 패턴을 입력하면, 각 단계의 진행 상황을 실시간으로 스트리밍합니다.
+
+    - **user_input**: 자연어 소비 패턴
+
+    이벤트 스트림:
+    - node_start: 각 노드 시작
+    - node_end: 각 노드 완료
+    - final_result: 최종 결과
+    - error: 에러 발생
     """
-    try:
-        if not all([benefit_analyzer, recommender, response_generator, vector_store]):
-            raise HTTPException(
-                status_code=503,
-                detail="RAG + Agentic 서비스를 사용할 수 없습니다. 서비스 초기화를 확인해주세요."
-            )
-        
-        # 1. 벡터 검색 (Top-M 후보 선정)
-        query_text = user_intent.get("query_text", "")
-        filters = user_intent.get("filters", {})
-        
-        # None 값을 가진 필터 키 제거
-        if filters:
-            filters = {k: v for k, v in filters.items() if v is not None}
-        
-        candidates = vector_store.search_cards(query_text, filters, top_m=5)
-        
-        if not candidates:
-            return {
-                "error": "조건에 맞는 카드를 찾을 수 없습니다.",
-                "recommendation_text": "죄송합니다. 입력하신 조건에 맞는 카드를 찾을 수 없습니다."
+    async def event_generator():
+        try:
+            user_input = payload.user_input.strip()
+
+            # 프롬프트 공격 검증
+            try:
+                validate_user_input(user_input)
+            except PromptAttackException as attack_error:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(attack_error.detail)}, ensure_ascii=False)}\n\n"
+                return
+
+            if not recommendation_graph:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'RAG + Agentic 서비스를 사용할 수 없습니다.'}, ensure_ascii=False)}\n\n"
+                return
+
+            # 초기 상태
+            initial_state = {
+                "user_input": user_input,
+                "intermediate_steps": []
             }
-        
-        # 2. 혜택 분석
-        user_pattern = {
-            "spending": user_intent.get("spending", {}),
-            "preferences": user_intent.get("preferences", {})
+
+            config = {"configurable": {"thread_id": f"stream_{int(time.time())}"}}
+
+            # 스트리밍 실행
+            async for event in recommendation_graph.astream_events(initial_state, config=config, version="v2"):
+                event_type = event.get("event")
+
+                if event_type == "on_chain_start":
+                    node_name = event.get("name", "")
+                    if node_name in ["parse_input", "vector_search", "benefit_analysis", "recommendation", "response_generation"]:
+                        yield f"data: {json.dumps({'type': 'node_start', 'node': node_name}, ensure_ascii=False)}\n\n"
+
+                elif event_type == "on_chain_end":
+                    node_name = event.get("name", "")
+                    if node_name in ["parse_input", "vector_search", "benefit_analysis", "recommendation", "response_generation"]:
+                        output = event.get("data", {}).get("output", {})
+                        yield f"data: {json.dumps({'type': 'node_end', 'node': node_name, 'success': True}, ensure_ascii=False)}\n\n"
+
+                elif event_type == "on_chat_model_stream":
+                    # LLM 토큰 스트리밍 (ResponseGenerator)
+                    chunk = event.get("data", {}).get("chunk")
+                    if chunk and hasattr(chunk, "content"):
+                        yield f"data: {json.dumps({'type': 'token', 'content': chunk.content}, ensure_ascii=False)}\n\n"
+
+            # 최종 결과 전송
+            final_state = await recommendation_graph.ainvoke(initial_state, config)
+
+            if final_state.get("final_response"):
+                yield f"data: {json.dumps({'type': 'final_result', 'response': final_state['final_response'], 'card_id': final_state.get('selected_card', {}).get('selected_card')}, ensure_ascii=False)}\n\n"
+            else:
+                error_msg = final_state.get("parsing_error") or final_state.get("search_error") or final_state.get("analysis_error") or final_state.get("recommendation_error") or final_state.get("response_error") or "알 수 없는 오류"
+                yield f"data: {json.dumps({'type': 'error', 'message': error_msg}, ensure_ascii=False)}\n\n"
+
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive"
         }
-        
-        card_contexts = [
-            {
-                "card_id": c["card_id"],
-                "evidence_chunks": c["evidence_chunks"]
-            }
-            for c in candidates
-        ]
-        
-        analysis_results = await benefit_analyzer.analyze_batch(user_pattern, card_contexts)
-        
-        # 3. 최종 선택
-        recommendation_result = recommender.select_best_card(
-            analysis_results,
-            user_preferences=user_intent.get("preferences")
-        )
-        
-        # 4. 응답 생성
-        recommendation_text = response_generator.generate(
-            recommendation_result,
-            user_pattern=user_pattern
-        )
-        
-        return {
-            "recommendation_text": recommendation_text,
-            "selected_card": {
-                "card_id": recommendation_result["selected_card"],
-                "name": recommendation_result.get("name", "")
-            },
-            "annual_savings": recommendation_result.get("annual_savings", 0),
-            "monthly_savings": recommendation_result.get("annual_savings", 0) // 12,
-            "annual_fee": recommendation_result.get("annual_fee", 0),
-            "net_benefit": recommendation_result.get("score_breakdown", {}).get("net_benefit", 0),
-            "analysis_details": {
-                "warnings": recommendation_result.get("warnings", []),
-                "category_breakdown": recommendation_result.get("category_breakdown", {}),
-                "conditions_met": recommendation_result.get("conditions_met", False)
-            }
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"추천 생성 중 오류가 발생했습니다: {str(e)}"
-        )
-"""
-관리자 관련 라우트(/admin/*)는 `admin/routes.py`로 모듈화되었습니다.
-`main.py`에서는 `app.include_router(admin_router)`로만 등록합니다.
-"""
+    )
+
+
+# 관리자 관련 라우트(/admin/*)는 `admin/routes.py`로 모듈화되었습니다.
 
 if __name__ == "__main__":
     print("📝 사용법:")

@@ -1,8 +1,8 @@
 """
-혜택 분석 Agent
+혜택 분석 Agent - LangChain 기반
 
 후보 카드에 대해 사용자의 실제 소비 패턴을 기반으로 정량적 혜택을 계산합니다.
-LLM이 카드 혜택 설명을 해석하고, 사용자 지출과 매칭하여 월/연 절약액을 산출합니다.
+LangChain async를 사용하여 카드 혜택 설명을 해석하고, 사용자 지출과 매칭하여 월/연 절약액을 산출합니다.
 """
 
 from utils import measure_time
@@ -11,59 +11,70 @@ import asyncio
 import sys
 from pathlib import Path
 from typing import Dict, List
-from openai import AsyncOpenAI
+from pydantic import BaseModel, Field
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
 import os
 from dotenv import load_dotenv
+
 project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-
 load_dotenv()
 
 
+# Pydantic 모델 정의
+class BenefitAnalysis(BaseModel):
+    """혜택 분석 결과"""
+    card_id: int = Field(description="카드 ID")
+    monthly_savings: float = Field(description="월 예상 절약액 (원)")
+    annual_savings: float = Field(description="연 예상 절약액 (원)")
+    conditions_met: bool = Field(description="전월실적 등 조건 충족 여부")
+    warnings: List[str] = Field(
+        default_factory=list,
+        description="주의사항 (전월실적 미충족, 한도 초과, 제외 항목 등)"
+    )
+    category_breakdown: Dict[str, float] = Field(
+        default_factory=dict,
+        description="카테고리별 월 절약액 (원)"
+    )
+    optimization_tips: List[str] = Field(
+        default_factory=list,
+        description="혜택 최대화를 위한 사용 전략"
+    )
+    reasoning: str = Field(description="계산 근거")
+
+
 class BenefitAnalyzer:
-    def __init__(self, model: str = "gpt-5-mini"):
+    """혜택 분석기 - LangChain 기반"""
+
+    def __init__(self, model: str = "gpt-4o-mini"):
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY가 설정되어 있지 않습니다.")
-        self.client = AsyncOpenAI(api_key=api_key)
-        self.model = model
 
-    @staticmethod
-    def _function_schema() -> Dict:
-        return {
-            "name": "analyze_benefit",
-            "description": "카드 혜택 설명과 사용자 소비 패턴을 분석하여 실제 절약 금액을 계산합니다.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "monthly_savings": {"type": "number", "description": "월 예상 절약액 (원)"},
-                    "annual_savings": {"type": "number", "description": "연 예상 절약액 (원)"},
-                    "conditions_met": {"type": "boolean", "description": "전월실적 등 조건 충족 여부"},
-                    "warnings": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "주의사항 (전월실적 미충족, 한도 초과, 제외 항목 등)",
-                    },
-                    "category_breakdown": {
-                        "type": "object",
-                        "description": "카테고리별 월 절약액 (원)",
-                        "additionalProperties": {"type": "number"},
-                    },
-                    "optimization_tips": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "혜택 최대화를 위한 사용 전략",
-                    },
-                    "reasoning": {"type": "string", "description": "계산 근거"},
-                },
-                "required": ["monthly_savings", "annual_savings", "conditions_met", "warnings"],
-            },
-        }
+        # LangChain ChatOpenAI 초기화
+        self.llm = ChatOpenAI(
+            model=model,
+            temperature=1.0,
+            openai_api_key=api_key
+        )
+
+        # Structured output으로 변환 (function_calling 방식 사용)
+        self.structured_llm = self.llm.with_structured_output(BenefitAnalysis, method="function_calling")
+
+        # 프롬프트 템플릿 정의
+        self.prompt = ChatPromptTemplate.from_messages([
+            ("system", """당신은 신용카드 혜택 분석 전문가입니다.
+사용자의 소비 패턴/관심 카테고리와 카드 혜택을 매칭하여 적합성을 평가하고
+절약액을 계산합니다. 구체적인 금액이 없어도 카테고리 매칭이 좋으면 긍정적으로 평가합니다."""),
+            ("user", """{prompt}""")
+        ])
 
     @staticmethod
     def _build_evidence_context(card_context: Dict) -> str:
+        """증거 청크를 텍스트로 구성"""
         parts: List[str] = []
         for chunk in card_context.get("evidence_chunks", []):
             text = (chunk.get("text") or "").strip()
@@ -76,6 +87,7 @@ class BenefitAnalyzer:
 
     @staticmethod
     def _build_user_summary(user_pattern: Dict) -> str:
+        """사용자 소비 패턴을 텍스트로 요약"""
         spending = user_pattern.get("spending", {}) or {}
         constraints = user_pattern.get("constraints", {}) or {}
         must_include = constraints.get("must_include_categories", []) or []
@@ -85,8 +97,7 @@ class BenefitAnalyzer:
             if isinstance(data, dict):
                 amount = float(data.get("amount", 0) or 0)
             else:
-                amount = float(data or 0) if isinstance(
-                    data, (int, float)) else 0.0
+                amount = float(data or 0) if isinstance(data, (int, float)) else 0.0
 
             if amount > 0:
                 lines.append(f"{category}: {int(amount):,}원/월")
@@ -95,17 +106,26 @@ class BenefitAnalyzer:
         if lines:
             parts.append("**구체적인 지출 금액:**\n" + "\n".join(lines))
         if must_include:
-            parts.append("**사용자가 관심있는 카테고리:**\n" +
-                         ", ".join(map(str, must_include)))
+            parts.append("**사용자가 관심있는 카테고리:**\n" + ", ".join(map(str, must_include)))
 
         return "\n\n".join(parts).strip() if parts else "구체적인 소비 금액 정보 없음"
 
     @measure_time("analyze_one")
     async def analyze_one(self, user_pattern: Dict, card_context: Dict) -> Dict:
+        """
+        단일 카드 혜택 분석 - LangChain async 사용
+
+        Args:
+            user_pattern: 사용자 소비 패턴
+            card_context: 카드 컨텍스트 (증거 청크 포함)
+
+        Returns:
+            BenefitAnalysis Dict
+        """
         evidence_context = self._build_evidence_context(card_context)
         user_summary = self._build_user_summary(user_pattern)
 
-        prompt = f"""다음은 사용자의 소비 패턴과 카드 혜택 정보입니다.
+        prompt_text = f"""다음은 사용자의 소비 패턴과 카드 혜택 정보입니다.
 
 [사용자 소비 패턴]
 {user_summary}
@@ -123,72 +143,69 @@ class BenefitAnalyzer:
 전월실적 조건 처리 규칙:
 - 사용자의 전월실적 정보가 명시적으로 제공되지 않은 경우, 일반적인 소비자 기준으로 충족 가능성을 판단하세요.
 - 관심 카테고리를 정기적으로 사용한다면 충족 가능성이 높다고 가정하세요.
-- 전월실적 조건이 있으면 항상 warnings에 조건을 명시하세요. 
+- 전월실적 조건이 있으면 항상 warnings에 조건을 명시하세요.
 
 그외규칙
  - reasoning은 최대 5줄로 작성합니다.
  - optimization_tips는 최대 3개만 작성합니다.
  - category_breakdown은 혜택이 있는 카테고리만 포함하고 최대 5개로 제한합니다.
  - warnings는 최대 6개로 요약합니다.
+ - card_id는 반드시 {card_context.get("card_id")}로 설정하세요.
 """
 
-        schema = self._function_schema()
-
         try:
-            res = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "당신은 신용카드 혜택 분석 전문가입니다. "
-                            "사용자의 소비 패턴/관심 카테고리와 카드 혜택을 매칭하여 적합성을 평가하고 "
-                            "절약액을 계산합니다. 구체적인 금액이 없어도 카테고리 매칭이 좋으면 긍정적으로 평가합니다."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                tools=[{"type": "function", "function": schema}],
-                tool_choice={"type": "function",
-                             "function": {"name": "analyze_benefit"}}
-            )
+            # LangChain 체인 구성 및 실행 (async)
+            chain = self.prompt | self.structured_llm
+            result = await chain.ainvoke({"prompt": prompt_text})
 
-            msg = res.choices[0].message
-            if not msg.tool_calls:
-                raise ValueError("Function call이 반환되지 않았습니다.")
-
-            args = json.loads(msg.tool_calls[0].function.arguments)
-            args["card_id"] = card_context.get("card_id")
-            return args
+            # Pydantic 모델을 Dict로 변환
+            return result.model_dump()
 
         except Exception as e:
             raise ValueError(
-                f"혜택 분석 실패 (card_id={card_context.get('card_id')}): {e}") 
+                f"혜택 분석 실패 (card_id={card_context.get('card_id')}): {e}"
+            )
 
     @measure_time("analyze_batch")
     async def analyze_batch(self, user_pattern: Dict, card_contexts: List[Dict]) -> List[Dict]:
+        """
+        배치 카드 혜택 분석 - LangChain async 병렬 처리
+
+        Args:
+            user_pattern: 사용자 소비 패턴
+            card_contexts: 카드 컨텍스트 리스트
+
+        Returns:
+            BenefitAnalysis Dict 리스트
+        """
         if not card_contexts:
-            return [] 
+            return []
+
         print(f"Analyzing {len(card_contexts)} cards")
+
+        # 병렬 실행
         tasks = [self.analyze_one(user_pattern, c) for c in card_contexts]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
+        # 결과 정리
         out: List[Dict] = []
         for i, r in enumerate(results):
             card_id = card_contexts[i].get("card_id", "unknown")
             if isinstance(r, Exception):
-                out.append(
-                    {
-                        "card_id": card_id,
-                        "monthly_savings": 0,
-                        "annual_savings": 0,
-                        "conditions_met": False,
-                        "warnings": [str(r)],
-                        "category_breakdown": {},
-                    }
-                )
+                # 에러 발생 시 기본값 반환
+                out.append({
+                    "card_id": card_id,
+                    "monthly_savings": 0,
+                    "annual_savings": 0,
+                    "conditions_met": False,
+                    "warnings": [str(r)],
+                    "category_breakdown": {},
+                    "optimization_tips": [],
+                    "reasoning": f"분석 실패: {str(r)}"
+                })
             else:
                 out.append(r)
+
         return out
 
 
